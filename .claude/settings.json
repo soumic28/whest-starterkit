@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:arxiv.org)",
+      "Bash(sort -t: -k2 -rn)",
+      "Bash(uv pip *)",
+      "Bash(uv venv *)",
+      "Bash(C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/d7a1a375-cfa9-4b47-98a7-f2a56d6f2491/scratchpad/arcvenv/Scripts/python.exe run_arc_kprop.py)",
+      "Bash(python - C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/d7a1a375-cfa9-4b47-98a7-f2a56d6f2491/scratchpad/estimator_lhs.py)",
+      "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 uv run whest submit --estimator estimator.py --watch --watch-timeout 900)"
+    ]
+  }
+}
