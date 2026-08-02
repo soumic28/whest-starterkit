@@ -1,8 +1,8 @@
 # WhestBench 2026 — Status Report
 
 **Project:** ARC White-Box Estimation Challenge 2026 (`whest-starterkit`)
-**Last updated:** 2026-07-26
-**Current submission:** `#318789` — antithetic Monte Carlo + input whitening
+**Last updated:** 2026-08-02
+**Designated submission:** `#322542` — whitened antithetic Monte Carlo, strict float32
 
 ---
 
@@ -10,22 +10,63 @@
 
 | Metric | Value |
 |---|--:|
-| **Adjusted score (mini split, 100 MLPs)** | **4.12 × 10⁻⁷** |
-| Raw final-layer MSE | 6.20 × 10⁻⁷ |
-| vs Monte-Carlo reference (7.0 × 10⁻⁷) | **~2×** |
+| **Graded score (#322542)** | **3.89 × 10⁻⁷** |
+| Graded raw final-layer MSE | 6.42 × 10⁻⁷ |
+| Graded compute multiplier | 0.607 |
+| Adjusted score (mini split, 100 MLPs) | 3.98 × 10⁻⁷ |
+| vs Monte-Carlo reference (7.0 × 10⁻⁷) | **~1.8×** |
 | Failed MLPs | **0 / 100** |
-| Compute utilization | 0.665 |
-| Wall-clock per MLP | ~1.1 s (limit 60 s) |
+| Wall-clock per MLP | ~0.9 s (limit 60 s) |
 
 ### Progression
 
-| Submission | Method | Adjusted | vs sampling |
+| Submission | Method | Graded | vs sampling |
 |---|---|--:|--:|
 | #318691 | covariance propagation | 6.62 × 10⁻⁶ | 0.098× |
 | #318705 | antithetic Monte Carlo | 6.25 × 10⁻⁷ | 1.12× |
-| **#318789** | **+ input whitening** | **~3.5 × 10⁻⁷ (exp.)** | **~2×** |
+| #318789 / #318802 / #322538 | + whitening, float64 hot path | 0.70 / 6.6e-5 / 6.6e-5 | **failed** |
+| **#322542** | **+ whitening, strict float32** | **3.89 × 10⁻⁷** | **~1.8×** |
 
-Roughly a **19× improvement**, with zero failures at every step.
+Roughly a **17× improvement** over the first submission.
+
+> **#318705 must not be designated for Phase 2.** Measured under `flopscope==0.10.0`
+> — what the grader runs today — it exhausts the budget on 3/3 real MLPs and scores
+> ~1.1 × 10⁻⁴. It worked in July only because the grader was on the older flopscope.
+> See §1a.
+
+### 1a. The dtype-billing trap (cause of three failed submissions)
+
+From **flopscope 0.9.0** onward, FLOPs are billed at a per-dtype **rate**:
+float16/float32 = 1.0, **float64 = 2.0** (`flopscope/_weights.py`,
+`_ACTIVE_DTYPE_RATES`). The starter kit pins `flopscope>=0.8.0rc5,<0.9.0`, which
+has no such rate — its docs still say *"dtype matters for precision, not FLOPs."*
+The grader is on the newer one (whestbench 0.14.0 requires flopscope ≥ 0.10.0).
+
+Two sources of float64 each double the entire forward pass on their own:
+
+- **`mlp.weights` are float64**, so `matmul(x_f32, w_f64)` promotes.
+- **`fnp.eye` / `fnp.zeros` default to float64**, so a whitening matrix built
+  from them promotes the sample block at `x @ M`.
+
+Submission #322538 validated at 0.68 utilization locally and hit **1.08 on the
+grader**, exhausting the budget partway through the forward pass and scoring the
+covariance-propagation fallback. The fix is to cast weights with
+`fnp.asarray(w, dtype=fnp.float32)` and to pass `dtype=fnp.float32` to every
+`eye`/`zeros`. That alone took the score from 6.58 × 10⁻⁵ to 3.89 × 10⁻⁷.
+
+This also **retracts** the earlier conclusion that `fnp.linalg` is not
+grader-safe. Running the grader's real `flopscope-client`/`flopscope-server`
+stack locally gives bit-identical values to in-process flopscope — including
+`cholesky`, `inv`, `.T` and `float(...)` — on both synthetic and real dataset
+MLPs. Whitening was never the problem.
+
+**Reproduce the grader before every submission:** install `flopscope==0.10.0`
+in a scratch venv, run the estimator on real dataset MLPs whose weights were
+saved *without* casting, and check `ctx.flops_used` against the budget. Read
+graded diagnostics from `GET https://www.aicrowd.com/api/v1/submissions/{id}`
+with `Authorization: Token <key>` — `score_secondary` is the raw MSE, so
+`score / score_secondary` is the compute multiplier and immediately reveals a
+blown budget.
 
 ---
 
@@ -34,14 +75,28 @@ Roughly a **19× improvement**, with zero failures at every step.
 ```
 1. Draw N/2 Gaussian samples; append their negatives  (antithetic)
       -> every ODD sample moment is exactly zero
-2. Whiten: C = XᵀX/N = LLᵀ ;  X_w = X · inv(L)ᵀ
+2. Whiten: C = XᵀX/N ;  M = C^(-1/2) by Newton-Schulz (matmul only)
       -> sample covariance is exactly I  (kills the degree-2 error)
-3. Forward all samples; average post-ReLU activations per layer
-4. Fallbacks: plain antithetic MC -> covariance propagation -> zeros
-5. Sanitize: finite, shape (depth, width), float32
+3. VERIFY MᵀCM == I. If it fails, forward the unwhitened block instead.
+4. Forward all samples in float32; average post-ReLU activations per layer
+5. Fallback: covariance propagation (~0.6% of budget) -> zeros
+6. Sanitize: finite, shape (depth, width), float32
 ```
 
 N is sized to 60% of the FLOP budget including whitening's `4·N·n²` overhead.
+**Every array on the hot path stays float32** — see §1a.
+
+Two design rules, each bought with a failed submission:
+
+- **The guard checks the property, not a proxy.** `MᵀCM == I` is exactly what
+  whitening claims, and costs `2·width³` (~0.01% of budget) because it works on
+  the 256×256 covariance rather than the sample block. #318802's
+  `mean(x²) ≈ 1` check only caught scale errors.
+- **Never chain two expensive methods.** FLOPs spent by a failed attempt are
+  never refunded, so "whitening at 60% → plain MC at 60%" needs 120% of budget
+  and is guaranteed to exhaust it — that is what #318802 did. Here the guard
+  fires *before* the forward pass, so its failure path is free: the same
+  forward pass on the same samples, minus the whitening.
 
 ---
 
