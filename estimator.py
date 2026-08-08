@@ -91,12 +91,42 @@ import flopscope as flops
 import flopscope.numpy as fnp
 from whestbench import MLP, BaseEstimator
 
-# Fraction of the FLOP budget spent on the sampling pass. The adjusted score is
-# very nearly invariant in this number — raw MSE falls as 1/N while the compute
-# multiplier rises as N, so the two cancel — which makes margin against the
-# budget cliff (exhaustion zeroes the whole MLP) essentially free. 0.60 lands
-# utilisation near 0.61 on the grader.
-_BUDGET_FRACTION = 0.60
+# Fraction of the FLOP budget spent on the sampling pass.
+#
+# This was long believed to be a non-lever, on the reasoning that raw MSE falls
+# as 1/N while the multiplier rises as N, so the two cancel. THAT IS WRONG, and
+# three paired submissions on the real grader say so. Raw MSE does not go to
+# zero with N; it has a floor:
+#
+#     raw(f) = A + K/f      A = 1.45e-7, K = 2.98e-7   (measured, 2026-08-08)
+#     score(f) = raw(f) * max(0.1, f + r)      r = 0.0045 (residual share)
+#
+#   submission     f      raw        multiplier   score
+#   #325981      0.60   6.4190e-7      0.605     3.8846e-7
+#   #325982      0.45   8.0295e-7      0.455     3.6512e-7
+#   #325983      0.30   1.1380e-6      0.304     3.4624e-7   <- shipped
+#
+# The fit predicted f=0.30 at 3.431e-7 against 3.462e-7 measured, so the model
+# is trustworthy within ~1%. With A > 0 the score has a real interior minimum
+# near f ~ 0.10-0.12 (~3.27e-7), because the constant A stops paying for the
+# extra samples long before the multiplier stops charging for them.
+#
+# 0.30 rather than 0.12 is deliberate. It takes 12% of the available 19% and
+# keeps two safety properties the optimum gives up:
+#
+#   * The 0.1 multiplier FLOOR is a cliff, not a slope. Below f + r = 0.1 the
+#     multiplier stops falling while raw MSE keeps rising, so f = 0.08 scores
+#     3.78e-7 — worse than f = 0.60. At 0.30 we sit 3x clear of it.
+#   * Low f amplifies residual wall time, which is charged at lambda = 1e11
+#     FLOP/s no matter how few samples we draw. If R triples on the private
+#     hardware, f = 0.30 still beats f = 0.12.
+#
+# A is most likely the grader's own ground-truth sampling noise, which is a
+# property of the evaluation suite, not of this estimator — so on a private
+# re-evaluation with a differently sized suite A may move. The asymmetry still
+# favours the lower fraction: if A held, 0.30 wins 12%; if A vanished entirely,
+# 0.30 would lose only ~1% to 0.60.
+_BUDGET_FRACTION = 0.30
 
 # Newton-Schulz iterations for the inverse square root (matmul-only whitening).
 _NS_ITERS = 12
@@ -138,9 +168,15 @@ def _sample_count(mlp: MLP, budget: int, *, whitening: bool) -> int:
 
 
 def _antithetic(width: int, n_samples: int, seed: int):
-    """Antithetic sample block: rows are x and -x, so odd moments vanish exactly."""
+    """Antithetic sample block: rows are x and -x, so odd moments vanish exactly.
+
+    `.astype` already returns a flopscope array, so wrapping it in `fnp.array`
+    only bought a second copy — and since flopscope 0.9 a copy is billed at one
+    FLOP per element written, so that wrapper cost `width * n_samples / 2`
+    for nothing.
+    """
     rng = fnp.random.default_rng(seed)
-    half = fnp.array(rng.standard_normal((n_samples // 2, width)).astype(fnp.float32))
+    half = rng.standard_normal((n_samples // 2, width)).astype(fnp.float32)
     return fnp.concatenate([half, -half], axis=0)
 
 
@@ -232,12 +268,19 @@ def _monte_carlo(mlp: MLP, budget: int) -> fnp.ndarray:
 
 
 def _relu_moments(mu_pre, var_pre):
-    """Exact first two moments of ReLU(Z), Z ~ N(mu_pre, var_pre), per neuron."""
+    """Exact first two moments of ReLU(Z), Z ~ N(mu_pre, var_pre), per neuron.
+
+    `flops.stats.*` returns float64 for ANY input dtype — it mirrors
+    `scipy.stats`, and the organizers have confirmed they are keeping that
+    behaviour (only adding a warning in 0.11.0). Under dtype-aware billing one
+    such call silently moves everything downstream into the 2x lane, so both
+    results are cast straight back to float32.
+    """
     var_pre = fnp.maximum(var_pre, 1e-12)
     sigma = fnp.sqrt(var_pre)
     alpha = mu_pre / sigma
-    phi = flops.stats.norm.pdf(alpha)
-    Phi = flops.stats.norm.cdf(alpha)
+    phi = flops.stats.norm.pdf(alpha).astype(fnp.float32)
+    Phi = flops.stats.norm.cdf(alpha).astype(fnp.float32)
     mean = mu_pre * Phi + sigma * phi
     ez2 = (mu_pre * mu_pre + var_pre) * Phi + mu_pre * sigma * phi
     return mean, fnp.maximum(ez2 - mean * mean, 0.0), Phi
