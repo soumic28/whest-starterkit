@@ -7,7 +7,16 @@
       "Bash(uv venv *)",
       "Bash(C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/d7a1a375-cfa9-4b47-98a7-f2a56d6f2491/scratchpad/arcvenv/Scripts/python.exe run_arc_kprop.py)",
       "Bash(python - C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/d7a1a375-cfa9-4b47-98a7-f2a56d6f2491/scratchpad/estimator_lhs.py)",
-      "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 uv run whest submit --estimator estimator.py --watch --watch-timeout 900)"
+      "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 uv run whest submit --estimator estimator.py --watch --watch-timeout 900)",
+      "Bash(python -c \"import whestbench,os;print\\(os.path.dirname\\(whestbench.__file__\\)\\)\")",
+      "Bash(grep -n 'def sample_mlp' -A 25 __TRACKED_VAR__/generation.py)",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/60c5f757-bac3-4f12-8fee-fafe4abd859a/scratchpad/depth_check.py\")",
+      "Bash(time ./.venv/Scripts/python.exe \"C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/60c5f757-bac3-4f12-8fee-fafe4abd859a/scratchpad/hybrid_shape.py\" --truth-pairs 40000 --seeds 0)",
+      "Bash(time ./.venv/Scripts/python.exe \"C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/60c5f757-bac3-4f12-8fee-fafe4abd859a/scratchpad/hybrid_shape.py\" --truth-pairs 1000000 --seeds 0 1)",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/soumi/AppData/Local/Temp/claude/c--Users-soumi-Desktop-whest-starterkit/60c5f757-bac3-4f12-8fee-fafe4abd859a/scratchpad/covprop_accuracy.py\")",
+      "Bash(PYTHONUTF8=1 ./.venv/Scripts/whest.exe run --help)",
+      "Bash(export PYTHONUTF8=1 PYTHONIOENCODING=utf-8)",
+      "Bash(./.venv/Scripts/python.exe estimator.py)"
     ]
   }
 }
