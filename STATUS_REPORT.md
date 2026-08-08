@@ -60,52 +60,64 @@ lands around **#140**.
 | #318789 / #318802 / #322538 | + whitening, float64 hot path | 0.70 / 6.6e-5 / 6.6e-5 | **failed** |
 | #322542 | + whitening, strict float32 | 3.89 × 10⁻⁷ | ~1.8× |
 | #325981 | + copy/stats billing fixes, f = 0.60 | 3.88 × 10⁻⁷ | ~1.8× |
-| #325982 | f = 0.45 | 3.65 × 10⁻⁷ | ~1.9× |
+| #325982 / #325986 / #325987 | budget-fraction sweep (see §1b) | 3.65 / 4.00 / 3.76 × 10⁻⁷ | — |
 | **#325983** | **f = 0.30** | **3.46 × 10⁻⁷** | **~2.0×** |
 
-Roughly a **19× improvement** over the first submission.
+Roughly a **19× improvement** over the first submission — though the honest
+accounting is that everything after #322542 is worth ~0.3% (two billing fixes);
+the rest of the spread in that table is measurement noise, per §1b. All five
+2026-08-08 submissions are statistically equivalent in expectation.
 
 #325981's raw MSE is **bit-identical** to #322542's (6.419045888605978 × 10⁻⁷),
 which confirms both that the estimator's numerics are unchanged and that neither
 the 0.10.0 repricing nor the single-core container materially raised our
 residual.
 
-### 1b. The budget fraction is a lever after all — worth 1.12×
+### 1b. The budget fraction — measured properly, and it is *not* a lever
 
-This report previously called it a non-lever, reasoning that raw MSE falls as
-1/N while the multiplier rises as N, so the two cancel. **That is wrong.** Raw
-MSE does not go to zero with N; it has a floor:
+A five-point sweep on the real grader settles a question this report has flipped
+on twice. The original reasoning was right: raw MSE falls as 1/N while the
+multiplier rises as N, and the two cancel.
+
+| id | f | N | raw | mult | resid | score | **V = raw·N** |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| #325981 | 0.60 | 36,470 | 6.4190e-7 | 0.6052 | 0.0052 | 3.8846e-7 | 0.02341 |
+| #325982 | 0.45 | 27,314 | 8.0295e-7 | 0.4547 | 0.0047 | 3.6512e-7 | 0.02193 |
+| **#325983** | **0.30** | 18,158 | 1.1380e-6 | 0.3043 | 0.0043 | **3.4624e-7** | 0.02066 |
+| #325986 | 0.15 | 9,004 | 2.6024e-6 | 0.1539 | 0.0039 | 4.0049e-7 | 0.02343 |
+| #325987 | 0.11 | 6,562 | 3.3023e-6 | 0.1138 | 0.0038 | 3.7564e-7 | 0.02167 |
+
+**`V = raw·N` is constant at 0.02222 ± 5.4%.** Raw MSE is exactly `V/N` with no
+floor, so
 
 ```
-raw(f)   = A + K/f                         A = 1.45e-7, K = 2.98e-7
-score(f) = raw(f) · max(0.1, f + r)        r = 0.0045
+score(f) = C · (1 + r/f)     C = V·per_sample/B = 3.64e-7,  r ≈ 0.0015
 ```
 
-| f | raw | multiplier | score |
-|---|--:|--:|--:|
-| 0.60 | 6.4190 × 10⁻⁷ | 0.605 | 3.8846 × 10⁻⁷ |
-| 0.45 | 8.0295 × 10⁻⁷ | 0.455 | 3.6512 × 10⁻⁷ |
-| **0.30** | 1.1380 × 10⁻⁶ | 0.304 | **3.4624 × 10⁻⁷** |
+and the **true spread across f = 0.11…0.60 is 1.1%**, against 5% run-to-run
+noise on V. Every apparent ordering in the score column above is noise —
+#325983's 3.46e-7 is a lucky draw, not an improvement.
 
-The fit predicted 3.431 × 10⁻⁷ for f = 0.30 against 3.462 × 10⁻⁷ measured, so it
-is good to ~1%. Because A > 0 the score has a genuine interior minimum near
-**f ≈ 0.10–0.12 (~3.27 × 10⁻⁷)**.
+**How this was briefly got wrong, because the failure mode is instructive.** The
+first three points (0.60 / 0.45 / 0.30) fit `raw = A + K/f` with A = 1.45e-7
+beautifully, predicted f = 0.30 at 3.431e-7 against 3.462e-7 measured — 1% error
+— and implied a 12% gain already banked plus more at f ≈ 0.12. Three monotone
+noise draws are indistinguishable from a bias floor. Extending to f = 0.15 and
+0.11 returned 4.00e-7 and 3.76e-7 — *worse*, and non-monotone, which is what
+exposed it.
 
-**We shipped 0.30, not the optimum**, taking 12% of the available 19%:
+> **Rule:** do not fit a score model on fewer than ~5 points over a narrow
+> range. Check the physical invariant (`raw·N`) rather than the fitted curve.
 
-- The 0.1 multiplier floor is a **cliff, not a slope**. Below `f + r = 0.1` the
-  multiplier stops falling while raw MSE keeps climbing — f = 0.08 scores
-  3.78 × 10⁻⁷, *worse than f = 0.60*. At 0.30 we sit 3× clear of it.
-- Low f amplifies residual wall time, charged at λ regardless of N. If R triples
-  on the private hardware, f = 0.30 still beats f = 0.12.
+**f = 0.30 is therefore chosen on robustness, not score.** Higher f is better by
+~0.25%, which is not worth having. What 0.30 buys is distance from two cliffs:
 
-A is most likely the **grader's own ground-truth sampling noise** — a property
-of the evaluation suite, not of this estimator — so it may move on a differently
-sized private suite. The asymmetry still favours the lower fraction: if A holds,
-0.30 wins 12%; if A vanished entirely, 0.30 loses only ~1% to 0.60.
-
-**This is invisible locally.** It only shows up in paired submissions on the real
-grader, because A belongs to the grader's ground truth.
+- **Budget exhaustion** zeroes the whole MLP. At f = 0.30 residual would have to
+  reach 1.9 s to trigger it, against 0.014 s measured — a 136× margin (78× at
+  f = 0.60).
+- **The 0.1 multiplier floor** is a cliff, not a slope: below `f + r = 0.1` the
+  multiplier stops falling while raw MSE keeps rising, so f = 0.08 is strictly
+  worse than anything above it. 0.30 sits 3× clear.
 
 > **#318705 must not be designated for Phase 2.** Measured under `flopscope==0.10.0`
 > — what the grader runs today — it exhausts the budget on 3/3 real MLPs and scores
@@ -265,19 +277,21 @@ stated precisely.
 ## 7. Open items
 
 - [ ] **NOMINATE 2 SUBMISSIONS before 10 Aug 23:59 UTC.** Recommended:
-      **#325983** (f = 0.30, 3.46 × 10⁻⁷) and **#325981** (f = 0.60,
-      3.88 × 10⁻⁷) — the second is the same estimator at double the budget-cliff
-      margin, so the pair hedges the one assumption #325983 leans on. Watch for
-      the organizers' email. **Do not let the default stand**: it would pick
-      #318705, which is broken under the current cost model.
+      **#325983** (f = 0.30) and **#325981** (f = 0.60). Per §1b these are
+      statistically equivalent in expectation, so the choice is about validity,
+      not score: both are verified under flopscope 0.10.0, both ran 0 failures,
+      and they bracket the budget-fraction range. Watch for the organizers'
+      email. **Do not let the default stand**: it would pick #318705, which is
+      broken under the current cost model.
 - [ ] **Algorithmic Contribution write-up due 17 Aug 2026** — §1b and §3 are the
       substance; a $500–5,000 community-contribution prize also exists for
       cost-model feedback.
 - [ ] **Regenerate the AIcrowd API key** — it was pasted in chat and shell history.
 - [x] Dev-only deps removed — `uv sync` against the new pins dropped torch,
       einops, jaxtyping, sympy, networkx and mpmath.
-- [ ] Optional: probe **f = 0.15–0.25**, worth a further 3–5% by the fitted model
-      and untested. Each probe is one submission against a 48/day quota.
+- [x] Probe low f — done (#325986 at 0.15, #325987 at 0.11). Both came back
+      *worse*, which is what disproved the bias-floor model. See §1b. **No
+      further budget-fraction work is worthwhile**; the whole range is 1.1%.
 
 ## 8. If work resumes
 
@@ -291,7 +305,9 @@ Ranks 1–4 sit at 4 × 10⁻¹⁰, far below the 4.16 × 10⁻⁸ oracle bound 
 measured — which is itself evidence they are not doing honest estimation, and
 they are now under manual compliance review.
 
-**The methodological lesson from §1b generalises:** a quantity that is a property
-of the *grader* rather than of the estimator cannot be measured locally at all.
-Before assuming any score model, spend two paired submissions on it — that is
-what turned a documented "non-lever" into a 12% gain in one afternoon.
+**The methodological lesson from §1b generalises**, and it is the opposite of
+what a three-point fit suggested: run-to-run noise on the 100-MLP suite is ~5%,
+so *any* effect smaller than about 10% needs either many submissions or a
+physical invariant to check against. `raw·N` was that invariant here, and it
+answered in one line what five submissions answered expensively. Ask what
+quantity should be conserved before fitting a curve to a score column.

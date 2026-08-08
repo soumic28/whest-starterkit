@@ -93,39 +93,40 @@ from whestbench import MLP, BaseEstimator
 
 # Fraction of the FLOP budget spent on the sampling pass.
 #
-# This was long believed to be a non-lever, on the reasoning that raw MSE falls
-# as 1/N while the multiplier rises as N, so the two cancel. THAT IS WRONG, and
-# three paired submissions on the real grader say so. Raw MSE does not go to
-# zero with N; it has a floor:
+# THIS IS NOT A LEVER, and it has now been measured properly rather than
+# assumed. Raw MSE falls as 1/N while the multiplier rises as N, so the two
+# cancel almost exactly:
 #
-#     raw(f) = A + K/f      A = 1.45e-7, K = 2.98e-7   (measured, 2026-08-08)
-#     score(f) = raw(f) * max(0.1, f + r)      r = 0.0045 (residual share)
+#     raw(f) = V/N,  N ~ f*B/per_sample     =>  score(f) = C * (1 + r/f)
+#     C = V*per_sample/B = 3.64e-7,  r = residual share ~ 0.0015
 #
-#   submission     f      raw        multiplier   score
-#   #325981      0.60   6.4190e-7      0.605     3.8846e-7
-#   #325982      0.45   8.0295e-7      0.455     3.6512e-7
-#   #325983      0.30   1.1380e-6      0.304     3.4624e-7   <- shipped
+# Five graded submissions on the real grader, 2026-08-08:
 #
-# The fit predicted f=0.30 at 3.431e-7 against 3.462e-7 measured, so the model
-# is trustworthy within ~1%. With A > 0 the score has a real interior minimum
-# near f ~ 0.10-0.12 (~3.27e-7), because the constant A stops paying for the
-# extra samples long before the multiplier stops charging for them.
+#   id         f     N        raw         mult    resid    score      V = raw*N
+#   #325981  0.60   36,470  6.4190e-7    0.6052  0.0052  3.8846e-7    0.02341
+#   #325982  0.45   27,314  8.0295e-7    0.4547  0.0047  3.6512e-7    0.02193
+#   #325983  0.30   18,158  1.1380e-6    0.3043  0.0043  3.4624e-7    0.02066
+#   #325986  0.15    9,004  2.6024e-6    0.1539  0.0039  4.0049e-7    0.02343
+#   #325987  0.11    6,562  3.3023e-6    0.1138  0.0038  3.7564e-7    0.02167
 #
-# 0.30 rather than 0.12 is deliberate. It takes 12% of the available 19% and
-# keeps two safety properties the optimum gives up:
+# **V = raw*N is constant at 0.02222 +/- 5.4%.** That is the whole story: raw
+# MSE is exactly V/N with no floor, so the model above holds and the TRUE score
+# spread across f = 0.11..0.60 is only **1.1%** — while the run-to-run noise on
+# V is 5%. Every apparent ordering in that score column is noise. A three-point
+# fit on f = 0.60/0.45/0.30 looked like a clean 12% gain and a bias floor
+# A = 1.45e-7; extending to f = 0.15 and 0.11 destroyed it. **Do not re-derive
+# a budget-fraction lever from fewer than ~5 points spanning a wide f range.**
 #
-#   * The 0.1 multiplier FLOOR is a cliff, not a slope. Below f + r = 0.1 the
-#     multiplier stops falling while raw MSE keeps rising, so f = 0.08 scores
-#     3.78e-7 — worse than f = 0.60. At 0.30 we sit 3x clear of it.
-#   * Low f amplifies residual wall time, which is charged at lambda = 1e11
-#     FLOP/s no matter how few samples we draw. If R triples on the private
-#     hardware, f = 0.30 still beats f = 0.12.
+# 0.30 is therefore chosen on robustness, not score. Higher f is better by
+# ~0.25%, which is not worth having; what 0.30 buys is distance from the two
+# cliffs:
 #
-# A is most likely the grader's own ground-truth sampling noise, which is a
-# property of the evaluation suite, not of this estimator — so on a private
-# re-evaluation with a differently sized suite A may move. The asymmetry still
-# favours the lower fraction: if A held, 0.30 wins 12%; if A vanished entirely,
-# 0.30 would lose only ~1% to 0.60.
+#   * BUDGET EXHAUSTION zeroes the whole MLP. At f = 0.30 residual would have to
+#     reach 1.9 s to trigger it, against 0.014 s measured — a 136x margin
+#     (78x at f = 0.60).
+#   * The 0.1 MULTIPLIER FLOOR is a cliff, not a slope: below f + r = 0.1 the
+#     multiplier stops falling while raw MSE keeps rising, so f = 0.08 is
+#     strictly worse than anything above it. 0.30 sits 3x clear.
 _BUDGET_FRACTION = 0.30
 
 # Newton-Schulz iterations for the inverse square root (matmul-only whitening).
