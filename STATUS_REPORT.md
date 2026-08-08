@@ -1,8 +1,38 @@
 # WhestBench 2026 — Status Report
 
 **Project:** ARC White-Box Estimation Challenge 2026 (`whest-starterkit`)
-**Last updated:** 2026-08-02
-**Designated submission:** `#322542` — whitened antithetic Monte Carlo, strict float32
+**Last updated:** 2026-08-08
+**Designated submission:** `#325983` — whitened antithetic Monte Carlo, strict float32, f = 0.30
+
+> **Phase 1 was extended to 10 August 2026, 23:59 UTC.** The write-up is due
+> 17 August. See §0 for the rule changes that came with the extension — one of
+> them can silently cost us the prize ranking.
+
+---
+
+## 0. What changed on 3 August (forum topic 18125)
+
+**Each team nominates up to 2 submissions** for the Phase 1 private
+re-evaluation, which is what decides prize rankings — the public board does not.
+**If you nominate nothing, AIcrowd takes your top 2 public submissions**, which
+for us would have included **#318705**, broken under the current cost model
+(~1.1 × 10⁻⁴). This must be overridden explicitly; the organizers said they
+will email nominating instructions.
+
+**Participant code now runs on one physical core** (2 vCPUs, down from 16); the
+flopscope backend keeps seven. Residual wall time is still charged at
+λ = 1e11 FLOP/s, so 0.1 s costs 3.7% of budget. Verified below.
+
+**The cost model was repriced** (flopscope 0.10.0 / whestbench 0.14.0): dtype
+rates as in §1a, and data movement is no longer free — copy / fill /
+`concatenate` / `astype` / `reshape` / `stack` / `eye` / `ones` bill 1 per
+element written, gather / sort bill 4. Still free: `zeros`, `empty`, views,
+`diag`, non-copying `asarray`. **float16 gets no discount** (rate 1.0, same as
+float32), so there is no dtype lever below float32.
+
+Two exploits were closed deliberately (float64 "packing", residual wall-time
+arbitrage). Compliance validation is **manual**, and submissions found to have
+circumvented FLOP accounting are disqualified before prize rollover.
 
 ---
 
@@ -10,13 +40,16 @@
 
 | Metric | Value |
 |---|--:|
-| **Graded score (#322542)** | **3.89 × 10⁻⁷** |
-| Graded raw final-layer MSE | 6.42 × 10⁻⁷ |
-| Graded compute multiplier | 0.607 |
-| Adjusted score (mini split, 100 MLPs) | 3.98 × 10⁻⁷ |
-| vs Monte-Carlo reference (7.0 × 10⁻⁷) | **~1.8×** |
-| Failed MLPs | **0 / 100** |
-| Wall-clock per MLP | ~0.9 s (limit 60 s) |
+| **Graded score (#325983)** | **3.46 × 10⁻⁷** |
+| Graded raw final-layer MSE | 1.14 × 10⁻⁶ |
+| Graded compute multiplier | 0.304 |
+| vs Monte-Carlo reference (7.0 × 10⁻⁷) | **~2.0×** |
+| Failed MLPs | **0** |
+| Wall-clock per MLP, one core | 2.4 s (limit 60 s) |
+| Residual wall time, grader | 0.0045 of budget |
+
+Public rank before this session was **#169 of 200+** at 3.895 × 10⁻⁷; 3.46 × 10⁻⁷
+lands around **#140**.
 
 ### Progression
 
@@ -25,9 +58,54 @@
 | #318691 | covariance propagation | 6.62 × 10⁻⁶ | 0.098× |
 | #318705 | antithetic Monte Carlo | 6.25 × 10⁻⁷ | 1.12× |
 | #318789 / #318802 / #322538 | + whitening, float64 hot path | 0.70 / 6.6e-5 / 6.6e-5 | **failed** |
-| **#322542** | **+ whitening, strict float32** | **3.89 × 10⁻⁷** | **~1.8×** |
+| #322542 | + whitening, strict float32 | 3.89 × 10⁻⁷ | ~1.8× |
+| #325981 | + copy/stats billing fixes, f = 0.60 | 3.88 × 10⁻⁷ | ~1.8× |
+| #325982 | f = 0.45 | 3.65 × 10⁻⁷ | ~1.9× |
+| **#325983** | **f = 0.30** | **3.46 × 10⁻⁷** | **~2.0×** |
 
-Roughly a **17× improvement** over the first submission.
+Roughly a **19× improvement** over the first submission.
+
+#325981's raw MSE is **bit-identical** to #322542's (6.419045888605978 × 10⁻⁷),
+which confirms both that the estimator's numerics are unchanged and that neither
+the 0.10.0 repricing nor the single-core container materially raised our
+residual.
+
+### 1b. The budget fraction is a lever after all — worth 1.12×
+
+This report previously called it a non-lever, reasoning that raw MSE falls as
+1/N while the multiplier rises as N, so the two cancel. **That is wrong.** Raw
+MSE does not go to zero with N; it has a floor:
+
+```
+raw(f)   = A + K/f                         A = 1.45e-7, K = 2.98e-7
+score(f) = raw(f) · max(0.1, f + r)        r = 0.0045
+```
+
+| f | raw | multiplier | score |
+|---|--:|--:|--:|
+| 0.60 | 6.4190 × 10⁻⁷ | 0.605 | 3.8846 × 10⁻⁷ |
+| 0.45 | 8.0295 × 10⁻⁷ | 0.455 | 3.6512 × 10⁻⁷ |
+| **0.30** | 1.1380 × 10⁻⁶ | 0.304 | **3.4624 × 10⁻⁷** |
+
+The fit predicted 3.431 × 10⁻⁷ for f = 0.30 against 3.462 × 10⁻⁷ measured, so it
+is good to ~1%. Because A > 0 the score has a genuine interior minimum near
+**f ≈ 0.10–0.12 (~3.27 × 10⁻⁷)**.
+
+**We shipped 0.30, not the optimum**, taking 12% of the available 19%:
+
+- The 0.1 multiplier floor is a **cliff, not a slope**. Below `f + r = 0.1` the
+  multiplier stops falling while raw MSE keeps climbing — f = 0.08 scores
+  3.78 × 10⁻⁷, *worse than f = 0.60*. At 0.30 we sit 3× clear of it.
+- Low f amplifies residual wall time, charged at λ regardless of N. If R triples
+  on the private hardware, f = 0.30 still beats f = 0.12.
+
+A is most likely the **grader's own ground-truth sampling noise** — a property
+of the evaluation suite, not of this estimator — so it may move on a differently
+sized private suite. The asymmetry still favours the lower fraction: if A holds,
+0.30 wins 12%; if A vanished entirely, 0.30 loses only ~1% to 0.60.
+
+**This is invisible locally.** It only shows up in paired submissions on the real
+grader, because A belongs to the grader's ground truth.
 
 > **#318705 must not be designated for Phase 2.** Measured under `flopscope==0.10.0`
 > — what the grader runs today — it exhausts the budget on 3/3 real MLPs and scores
@@ -186,15 +264,34 @@ stated precisely.
 
 ## 7. Open items
 
+- [ ] **NOMINATE 2 SUBMISSIONS before 10 Aug 23:59 UTC.** Recommended:
+      **#325983** (f = 0.30, 3.46 × 10⁻⁷) and **#325981** (f = 0.60,
+      3.88 × 10⁻⁷) — the second is the same estimator at double the budget-cliff
+      margin, so the pair hedges the one assumption #325983 leans on. Watch for
+      the organizers' email. **Do not let the default stand**: it would pick
+      #318705, which is broken under the current cost model.
+- [ ] **Algorithmic Contribution write-up due 17 Aug 2026** — §1b and §3 are the
+      substance; a $500–5,000 community-contribution prize also exists for
+      cost-model feedback.
 - [ ] **Regenerate the AIcrowd API key** — it was pasted in chat and shell history.
-- [ ] Remove dev-only deps: `uv pip uninstall torch einops jaxtyping`
-      (installed solely to run ARC's reference code).
-- [ ] **Designate the final submission before 19 Sep 2026** — that one goes to the
-      private re-run and decides prizes. Phase 1 (closes 31 Jul) does not.
+- [x] Dev-only deps removed — `uv sync` against the new pins dropped torch,
+      einops, jaxtyping, sympy, networkx and mpmath.
+- [ ] Optional: probe **f = 0.15–0.25**, worth a further 3–5% by the fitted model
+      and untested. Each probe is one submission against a 48/day quota.
 
 ## 8. If work resumes
 
-Sampling is exhausted. The only remaining route is a **mechanistic method that
-survives depth 32** — which is precisely the contest's open problem, and what the
-leaders (2.2–6× better accuracy-per-FLOP than us) evidently found. The Hermite
-spectrum and the 4.16e-8 target in §5 define exactly what such a method must do.
+Our *estimator* is exhausted as a sampler. The remaining route to the leaders is
+a **method that survives depth 32** — precisely the contest's open problem. The
+Hermite spectrum and the 4.16 × 10⁻⁸ target in §5 define exactly what it must do.
+
+Ranks 5–20 currently show raw MSE ~2 × 10⁻⁷ against our 1.14 × 10⁻⁶ at f = 0.30
+(6.4 × 10⁻⁷ at f = 0.60), so their variance-per-FLOP is genuinely ~4× better.
+Ranks 1–4 sit at 4 × 10⁻¹⁰, far below the 4.16 × 10⁻⁸ oracle bound this project
+measured — which is itself evidence they are not doing honest estimation, and
+they are now under manual compliance review.
+
+**The methodological lesson from §1b generalises:** a quantity that is a property
+of the *grader* rather than of the estimator cannot be measured locally at all.
+Before assuming any score model, spend two paired submissions on it — that is
+what turned a documented "non-lever" into a 12% gain in one afternoon.
