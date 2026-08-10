@@ -20,7 +20,7 @@ FENCE_RE = re.compile(r"```bash-test\n(.*?)```", re.DOTALL)
 def _readme_test_blocks() -> list[str]:
     if not README.exists():
         return []
-    text = README.read_text()
+    text = README.read_text(encoding="utf-8")
     return [block.strip() for block in FENCE_RE.findall(text)]
 
 

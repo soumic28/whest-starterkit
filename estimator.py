@@ -243,7 +243,7 @@ def _whitened_block(x, width: int):
     n = x.shape[0]
     C = fnp.matmul(x.T, x) / float(n)
     C = (C + C.T) * 0.5                      # explicit symmetry
-    C = C + fnp.eye(width, dtype=fnp.float32) * _JITTER
+    fnp.fill_diagonal(C, fnp.diag(C) + _JITTER)
     try:
         M = _inverse_sqrt(C, width)
         if _whitening_error(M, C, width) <= _WHITEN_TOL:
