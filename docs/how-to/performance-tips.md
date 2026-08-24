@@ -1,12 +1,130 @@
-# Performance Tips
+# Performance tips
 
 > [← Documentation](../README.md)
 
 This page lists concrete patterns for reducing FLOP usage in your estimator.
 
+## Stay in float32
+
+Since flopscope 0.9, every op's cost is also scaled by a `dtype_rate`: 1.0× for
+32-bit-or-smaller dtypes, 2.0× for float64/int64 (up to 4.0× for float128).
+NumPy promotion decides the billing dtype from your operands, so a single
+stray float64 array upgrades an entire expression to the 2× rate, matmuls
+included. `fnp.zeros()`/`fnp.ones()`/`fnp.eye()`/RNG draws all default to float64
+when you don't pass `dtype=`. This is usually the largest single reduction
+available on your FLOP total: pass `dtype=fnp.float32` when you create arrays
+and don't need the extra precision.
+
+**`mlp.weights` arrive as float32.** whestbench 0.16.0 pins them on every
+construction path (`domain.py` `MLP.from_row`, `generation.sample_mlp`), so
+there is nothing to cast. Confirm it in one line:
+
+```python
+print(mlp.weights[0].dtype)   # float32
+```
+
+Casting anyway is not free: `w.astype(fnp.float32)` on an already-float32
+`(1024, 1024)` weight still bills 1,048,576 FLOPs per layer, 16,777,216 across
+the 16 layers, for no change at all.
+
+**Seed your own state explicitly.** One `fnp.zeros(width)` with no `dtype=` is
+float64, and NumPy promotion moves every matmul against it onto the 2× rate no
+matter what the weights are.
+
+Both bundled analytical baselines seed at float32 for exactly this reason, and
+the effect is measured, not theoretical. At the competition shape
+(`width=1024, depth=16`):
+
+| Example | all-float64 † | float32 state | Saving | Final-layer MSE |
+|---|---:|---:|---:|---|
+| [`02_mean_propagation`](../../examples/02_mean_propagation.py) | 153,913,344 | **86,639,616** | 43.7% | unchanged to 5 s.f. |
+| [`03_covariance_propagation`](../../examples/03_covariance_propagation.py) | 103,407,495,614 | **51,709,240,799** | 49.99% | unchanged to 5 s.f. |
+
+That removes roughly half the FLOP total, on estimators whose accuracy does not change.
+
+† The two counterfactuals are defined slightly differently. The `02` figure
+drops the `dtype=fnp.float32` seeds **and** the two `.astype(fnp.float32)`
+recasts after `flops.stats.norm` (the fully-float64 estimator); dropping the
+seeds alone costs 153,978,880. The `03` figure drops only the seeds and keeps
+its recasts.
+
+**Watch for silent re-promotion.** `flops.stats.norm.cdf` / `.pdf` promote
+float32 input to float64 to match `scipy.stats`, and flopscope emits a
+`FlopscopeWarning` saying so. If you let the promoted result flow onward, it
+applies the 2× rate to the rest of the loop and undoes the seeding. In
+`02_mean_propagation` that alone is the difference between a 2.7% saving and a
+43.7% one. Cast straight back:
+
+```python
+phi_alpha = flops.stats.norm.pdf(alpha).astype(fnp.float32)
+Phi_alpha = flops.stats.norm.cdf(alpha).astype(fnp.float32)
+```
+
+`.astype()` bills 1 FLOP per element at the operand's dtype rate. Here the
+input is the float64 result of `flops.stats.norm`, so 1024 elements × 2.0 =
+2,048 FLOPs per call at width 1024, against the millions it protects. If you
+suspect a promotion, check `ctx.summary()`: a `float64` row where you expected
+`float32` identifies it.
+
+## Residual wall time is a hard gate, not a currency
+
+You are ranked on effective compute `C_m = F_m`. There is no λ term and no
+wall-clock term: wall-clock time does not enter the score in either direction.
+Wall time acts as a limit instead. Residual wall time
+(anything flopscope does not meter) is subject to a **hard cap of 400 ms per
+MLP**, on top of the **120 s** wall-clock cap on `predict()` as a whole. If you
+cross either limit, the harness replaces that MLP's prediction with zeros: no
+partial credit, no warning, and the MSE for that MLP is the MSE of a zero
+prediction.
+
+Residual time exists for plumbing: unpacking `mlp`, control flow around your
+`fnp` calls, assembling the array you return. **It is not a compute budget.**
+Doing meaningful computation outside `flopscope.numpy` is prohibited, not
+merely expensive: the rules treat it as an attempt to evade FLOP accounting.
+
+All of the following are **prohibited**, and using them is grounds
+for disqualifying the submission:
+
+- Vendoring or bundling your own `numpy`, `scipy`, or any BLAS.
+- Compiled kernels of any kind, and `ctypes` / `cffi` / any other FFI.
+- `threading`, `asyncio`, `subprocess`, or `multiprocessing`.
+- Running your own computation while a flopscope op is in flight.
+- Touching the flopscope client, its transport, or its accounting.
+
+Your submission may use the flopscope client API and the pure-Python standard
+library, and nothing else. Shipping **data** files (weights, lookup tables,
+other precomputed artifacts) remains permitted; it is *computation* outside
+flopscope that is not. See
+[`examples/04_shipped_weights.py`](../../examples/04_shipped_weights.py) for the
+supported way to bring precomputed work with you.
+
+Staying comfortably inside the 400 ms cap:
+
+- **Vectorise per-neuron Python loops into `fnp` array ops.** A 1024-iteration
+  Python loop is the most common way to exceed the residual cap, and it is doing
+  in slow Python exactly the work flopscope would have metered for you.
+- **Don't tune an internal deadline to your own machine's clock.** A
+  `time.time()` cutoff calibrated locally can trip early elsewhere and return
+  your fallback answer with no error. See
+  [Is scoring hardware-dependent?](../troubleshooting/faq.md#is-scoring-hardware-dependent).
+- **Measure it:** `uv run whest run --estimator estimator.py --profile`, then
+  read `residual_wall_time_s` per MLP. `--residual-wall-time-limit` already
+  defaults to 0.4, the graded cap, so a plain run gates you exactly as the live
+  round does. Pass the flag only to make the local run *stricter*. Anything
+  approaching 400 ms locally is likely to cross the cap on hardware you have
+  not tested.
+- **Stress the wall clock too:** re-running with `--max-threads 1` pins the BLAS
+  pool so `wall_time_s` is comparable across machines. It is a pessimistic
+  bound rather than a prediction, but it is a cheap way to see whether you are
+  anywhere near the 120 s cap.
+
+If you have a legitimate reason to sit near the residual cap (plumbing that
+genuinely needs the time, not computation), ask before you submit:
+[arc-whestbench@aicrowd.com](mailto:arc-whestbench@aicrowd.com).
+
 ## Matmul dominates your budget
 
-A single `fnp.matmul(A, B)` on two (n, n) matrices costs O(n^3) FLOPs. For width=256, that is ~33M FLOPs per matmul. In a 32-layer network, 32 matmuls cost ~1.07B FLOPs — well within the 2.72e11 default budget, but the cost dominates for any moderately-sized estimator.
+A single `fnp.matmul(A, B)` on two (n, n) matrices costs O(n^3) FLOPs, exactly `n · n · (2n − 1)`, and float64 costs exactly 2× float32 on top of that; see [Stay in float32](#stay-in-float32) above. Because the cost is cubic in the width, the competition width of 1024 makes matrix work dominate everything else in your estimator. Even [`examples/02_mean_propagation.py`](../../examples/02_mean_propagation.py), which never does a matrix-matrix product at all, still spends 77.42% of its 86,639,616 FLOPs in `matmul`. See the [worked walkthrough](./manage-flop-budget.md#worked-walkthrough-mean-propagation-line-by-line).
 
 **Tip:** If you only need diagonal information (per-neuron variance), avoid full matrix-matrix multiplies. Diagonal propagation uses matrix-vector products: O(n^2) per layer instead of O(n^3).
 
@@ -14,12 +132,14 @@ A single `fnp.matmul(A, B)` on two (n, n) matrices costs O(n^3) FLOPs. For width
 
 These cost 0 FLOPs in flopscope:
 
-- `fnp.zeros()`, `fnp.ones()`, `fnp.eye()`, `fnp.array()`
-- `fnp.reshape()`, `fnp.transpose()`
-- `fnp.concatenate()`, `fnp.stack()`
-- Indexing: `x[0]`, `x[:, 3]`, `fnp.diag(M)`
+- `fnp.zeros()`, `fnp.empty()`
+- Views: `.T` / `fnp.transpose()`, basic indexing and slicing (`x[0]`, `x[:, 3]`)
+- `fnp.diag()`, `fnp.diagonal()`
+- `fnp.asarray()` on an existing flopscope array (no copy), `fnp.random.default_rng(seed)` construction
 
-Precompute anything you can using free ops. Store intermediate values in variables — there is no memory cost in FLOP terms.
+**Since flopscope 0.9, these look free but aren't; they bill 1×/element (2× at float64):** `fnp.ones()`, `fnp.eye()`, `fnp.full()`, `fnp.array()` (and any copying `asarray`), `.copy()`, `.astype()`, `fnp.reshape()`/`.reshape()` (billed even where NumPy itself would return a view), `fnp.concatenate()`, `fnp.stack()`, `tile()`, `repeat()`. Cheap next to a matmul, but no longer zero. Don't reach for them as a "free" replacement for real computation.
+
+Precompute anything you can using the still-free ops above; for the billed ones, computing once outside a per-layer loop still costs less than recomputing every iteration. There is no separate memory cost in FLOP terms: flopscope only meters compute, not allocation. Memory is not unlimited, though: the solution process gets **8 GB**, so a batch sized purely by the FLOP budget can still exhaust RAM.
 
 ## Precompute outside the layer loop
 
@@ -33,28 +153,37 @@ for w in mlp.weights:
     scale = fnp.sqrt(2.0 / mlp.width)  # recomputed every layer
     ...
 
-# Do this (free):
-scale = fnp.sqrt(2.0 / mlp.width)  # computed once
+# Do this (computed once):
+scale = fnp.sqrt(2.0 / mlp.width)  # computed once, ~2 FLOPs total — not free, but trivial
 for w in mlp.weights:
     ...
 ```
 
-## Diagonal vs full covariance — know when to switch
+## Diagonal vs full covariance — an accuracy call, not a budget call
 
-| Approach | Cost per layer | When to use |
-|----------|---------------|-------------|
-| Mean propagation (diagonal) | O(width^2) | Default. Budget < 30 x width^2 |
-| Covariance propagation (full) | O(width^3) | Budget >= 30 x width^2 |
+At the competition shape (`width=1024, depth=16`) both bundled baselines fit the
+per-MLP budget of 2,199,023,255,552 FLOPs with room to spare:
+
+| Approach | Cost per layer | Measured per `predict()` | Share of the per-MLP budget |
+|----------|---------------|-------------------------:|----------------------------:|
+| Mean propagation (diagonal) | O(width^2) | 86,639,616 | 0.004% |
+| Covariance propagation (full) | O(width^3) | 51,709,240,799 | 2.351% |
+
+Full covariance is 597× the cost of mean propagation and *still* uses under 3%
+of the budget. The score multiplier is `max(0.1, C_m / B_m)`, so anything below
+10% of the budget leaves the multiplier pinned at its floor. Spending more
+FLOPs there costs you nothing. Pick the approach that predicts best, and only
+start trading accuracy for FLOPs once you are pushing past that floor.
 
 ## Check your budget breakdown
 
-Use `flops.budget_summary()` inside a `BudgetContext` to see exactly where your FLOPs go:
+To see exactly where your FLOPs go, use `flops.budget_summary()` inside a `BudgetContext`:
 
 ```python
 import flopscope as flops
 
-with flops.BudgetContext(flop_budget=272_000_000_000) as budget:
-    result = estimator.predict(mlp, budget=272_000_000_000)
+with flops.BudgetContext(flop_budget=2_199_023_255_552) as budget:
+    result = estimator.predict(mlp, budget=2_199_023_255_552)
     flops.budget_summary()
 ```
 
