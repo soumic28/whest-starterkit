@@ -82,10 +82,7 @@ Then climb: `whest validate` -> `whest run` -> `whest package`.
 
 from __future__ import annotations
 
-import argparse
-import importlib.util
 import math
-from pathlib import Path
 
 import flopscope as flops
 import flopscope.numpy as fnp
@@ -93,44 +90,56 @@ from whestbench import MLP, BaseEstimator
 
 # Fraction of the FLOP budget spent on the sampling pass.
 #
-# THIS IS NOT A LEVER, and it has now been measured properly rather than
-# assumed. Raw MSE falls as 1/N while the multiplier rises as N, so the two
-# cancel almost exactly:
+# PHASE 2 CHANGED WHAT THIS TRADES OFF, AND IT IS STILL NOT MUCH OF A LEVER.
 #
-#     raw(f) = V/N,  N ~ f*B/per_sample     =>  score(f) = C * (1 + r/f)
-#     C = V*per_sample/B = 3.64e-7,  r = residual share ~ 0.0015
+# Phase 1 priced residual wall time into the score at lambda = 1e11, so
+# score(f) = C*(1 + r/f) and higher f was very slightly better. Five graded
+# submissions spanning f = 0.11..0.60 confirmed the true spread was 1.1%
+# against 5% run-to-run noise: raw*N was constant at 0.02222 +/- 5.4%, so raw
+# MSE is exactly V/N and the multiplier's rise cancels it.
 #
-# Five graded submissions on the real grader, 2026-08-08:
+# Phase 2 sets lambda = 0 (C_m = F_m), which removes the residual term
+# entirely. What is left is the fixed cost of whitening, which does not scale
+# with the sample count:
 #
-#   id         f     N        raw         mult    resid    score      V = raw*N
-#   #325981  0.60   36,470  6.4190e-7    0.6052  0.0052  3.8846e-7    0.02341
-#   #325982  0.45   27,314  8.0295e-7    0.4547  0.0047  3.6512e-7    0.02193
-#   #325983  0.30   18,158  1.1380e-6    0.3043  0.0043  3.4624e-7    0.02066
-#   #325986  0.15    9,004  2.6024e-6    0.1539  0.0039  4.0049e-7    0.02343
-#   #325987  0.11    6,562  3.3023e-6    0.1138  0.0038  3.7564e-7    0.02167
+#     score(f) = (V/N) * (F_fixed + N*c_sample) / B
+#              = V*c_sample/B  +  V*F_fixed/(N*B)
 #
-# **V = raw*N is constant at 0.02222 +/- 5.4%.** That is the whole story: raw
-# MSE is exactly V/N with no floor, so the model above holds and the TRUE score
-# spread across f = 0.11..0.60 is only **1.1%** — while the run-to-run noise on
-# V is 5%. Every apparent ordering in that score column is noise. A three-point
-# fit on f = 0.60/0.45/0.30 looked like a clean 12% gain and a bias floor
-# A = 1.45e-7; extending to f = 0.15 and 0.11 destroyed it. **Do not re-derive
-# a budget-fraction lever from fewer than ~5 points spanning a wide f range.**
+# The first term is a constant floor. Only the second moves, so higher f is
+# better — but measured at the Phase 2 shape F_fixed = 4.3e10 against
+# N*c_sample = 6.0e11, so it is 6.7% of the bill at f = 0.30 and 3.4% at
+# f = 0.58. **Doubling f buys 3.5%.**
 #
-# 0.30 is therefore chosen on robustness, not score. Higher f is better by
-# ~0.25%, which is not worth having; what 0.30 buys is distance from the two
-# cliffs:
+# THE BINDING CONSTRAINT IS NO LONGER THE BUDGET. Phase 2 replaced the priced
+# residual with a hard 400 ms per-MLP cap, and an MLP that crosses it is scored
+# against zeros at multiplier 1.0. One such MLP in a suite of 100 contributes
+# ~0.9/100 = 9e-3 to a mean that is otherwise ~1e-6, so a single residual
+# overrun is roughly four orders of magnitude worse than every optimisation in
+# this file put together. Residual is dominated by the RNG draw, which scales
+# with N, so raising f spends the safety margin to buy the 3.5%:
 #
-#   * BUDGET EXHAUSTION zeroes the whole MLP. At f = 0.30 residual would have to
-#     reach 1.9 s to trigger it, against 0.014 s measured — a 136x margin
-#     (78x at f = 0.60).
-#   * The 0.1 MULTIPLIER FLOOR is a cliff, not a slope: below f + r = 0.1 the
-#     multiplier stops falling while raw MSE keeps rising, so f = 0.08 is
-#     strictly worse than anything above it. 0.30 sits 3x clear.
+#     f = 0.30   residual 0.164 s   2.4x margin
+#     f = 0.58   residual ~0.21 s   1.9x margin   (+3.5% score)
+#
+# That is not a trade worth making, and it points the opposite way from the
+# Phase 1 conclusion for a reason that has nothing to do with score. f = 0.30
+# also stays 3x clear of the 0.1 multiplier floor, which is a cliff rather than
+# a slope: below it the multiplier stops falling while raw MSE keeps rising.
 _BUDGET_FRACTION = 0.30
 
 # Newton-Schulz iterations for the inverse square root (matmul-only whitening).
-_NS_ITERS = 12
+#
+# Six, not twelve. NS converges quadratically and the sample covariance starts
+# close to I, so at the Phase 2 shape the whitening residual measured
+# mean((M^T C M - I)^2) = 1.5e-5, 5.5e-7, 1.5e-9, 3.5e-14, 9.2e-16 over the
+# first five iterations and then sits on the float32 floor. It is converged by
+# 4 even at N = 8,000 (d/N = 0.128), the noisiest block this estimator can
+# draw. Each iteration is three width^3 matmuls = 6.4e9 FLOPs at width 1024,
+# so the six unused ones were costing 3.9e10 — 5.5% of the whole bill — to
+# re-derive a number that had stopped moving. The guard below is what makes
+# trimming this safe: if six were ever too few, the check fails and the
+# unwhitened block is forwarded.
+_NS_ITERS = 6
 
 # Ridge added to the sample covariance, for numerical safety.
 _JITTER = 1e-6
@@ -150,16 +159,26 @@ _COV_RESCALE_THRESHOLD = 1e30
 
 
 def _whiten_overhead_flops(width: int) -> float:
-    """Sample-count-independent FLOPs of whitening: the NS loop plus the check."""
-    return (3.0 * _NS_ITERS + 4.0) * width ** 3
+    """Sample-count-independent FLOPs of whitening: the NS loop plus the check.
+
+    Each NS iteration is three `width x width` matmuls at `2*width^3` each, and
+    the check is two more. The old form of this used `3*_NS_ITERS + 4`, which
+    dropped the factor of two in `2*n^3` and so under-reserved by half; at
+    width 256 that was 0.15% of the budget and invisible, but at width 1024 the
+    same error is 1.8% and showed up directly as utilisation overshooting its
+    target (0.318 measured against f = 0.30).
+    """
+    return (6.0 * _NS_ITERS + 4.0) * width ** 3
 
 
 def _sample_count(mlp: MLP, budget: int, *, whitening: bool) -> int:
     """Largest even sample count fitting the budget fraction.
 
-    Per sample: `2*n*n*L` for the forward pass, plus `2*n*n` for whitening
-    (one `X^T X` to form the covariance, one `X @ M` to apply the transform).
-    Rounded up generously — over-reserving costs utilisation, not score.
+    Per sample: `2*n*n*L` for the forward pass, plus whitening's two passes
+    over the block — the Gram `X^T X`, billed at `n*n` because it is formed by
+    a symmetric-tagged einsum (see `_gram`), and `X @ M` at `2*n*n`. Reserved
+    as `4*n*n` rather than `3*n*n` so that the plain-matmul fallback inside
+    `_gram` cannot push the run over its own reservation.
     """
     n, L = mlp.width, mlp.depth
     per_sample = 2.0 * n * n * L + (4.0 * n * n if whitening else 0.0)
@@ -171,14 +190,56 @@ def _sample_count(mlp: MLP, budget: int, *, whitening: bool) -> int:
 def _antithetic(width: int, n_samples: int, seed: int):
     """Antithetic sample block: rows are x and -x, so odd moments vanish exactly.
 
-    `.astype` already returns a flopscope array, so wrapping it in `fnp.array`
-    only bought a second copy — and since flopscope 0.9 a copy is billed at one
-    FLOP per element written, so that wrapper cost `width * n_samples / 2`
-    for nothing.
+    Drawn directly in float32. `standard_normal` bills 16 FLOPs per element at
+    the dtype rate, so a float64 draw is 32 and a float32 draw is 16 — and the
+    float64 path then owes another `width*n_samples/2` for the `.astype` copy
+    that a float32 draw does not need. Measured at the Phase 2 block size:
+    309,544,960 FLOPs and 0.219 s for draw-then-cast against 158,955,520 and
+    0.141 s drawing float32 outright.
+
+    The FLOPs are noise against the forward pass; **the 78 ms is not.** Phase 2
+    replaced Phase 1's priced residual with a hard 400 ms per-MLP cap, and
+    crossing it zeroes that MLP — the single most expensive failure available,
+    since one zeroed MLP out of 100 costs more than every optimisation in this
+    file combined. The draw was 45% of measured residual, so this is a safety
+    change that happens to also be free.
+
+    `dtype=` is passed through a fallback rather than assumed: it has not been
+    exercised on the grader's `flopscope-client` RPC proxy, and the dtype is
+    re-checked afterwards in case the kwarg is accepted and then ignored. The
+    fallback is the exact draw-then-cast path that graded 3.46e-7 in Phase 1.
     """
     rng = fnp.random.default_rng(seed)
-    half = rng.standard_normal((n_samples // 2, width)).astype(fnp.float32)
+    shape = (n_samples // 2, width)
+    try:
+        half = rng.standard_normal(shape, dtype=fnp.float32)
+    except Exception:
+        half = rng.standard_normal(shape)
+    if half.dtype != fnp.float32:
+        half = half.astype(fnp.float32)
     return fnp.concatenate([half, -half], axis=0)
+
+
+def _gram(x, n_rows: int):
+    """`X^T X / n` — via einsum, which flopscope bills at half the matmul rate.
+
+    A Gram matrix is symmetric by construction, and flopscope 0.12 infers that
+    from the repeated operand in `einsum("ni,nj->ij", x, x)`: it returns a
+    SymmetryGroup-tagged array and bills only the upper triangle. Measured at
+    the Phase 2 block: 17,150,464,000 FLOPs against 34,267,463,680 for
+    `matmul(x.T, x)` — an exact halving, and 2.4% of the total bill.
+
+    Note this discount is only available on the *contraction*. Tagging does
+    nothing for the Newton-Schulz matmuls below, even though every iterate
+    there is symmetric too: measured 51,535,419,392 untagged against
+    51,711,580,136 with `as_symmetric` re-tags, i.e. the tags cost slightly
+    more than they save. Symmetry is priced into einsum, not into matmul.
+    """
+    try:
+        return fnp.einsum("ni,nj->ij", x, x) / float(n_rows)
+    except Exception:
+        C = fnp.matmul(x.T, x) / float(n_rows)
+        return (C + C.T) * 0.5   # einsum is exactly symmetric; matmul is not
 
 
 def _forward_layer_means(mlp: MLP, x) -> fnp.ndarray:
@@ -241,8 +302,7 @@ def _whitened_block(x, width: int):
     on plain antithetic MC instead of on an expensive second attempt.
     """
     n = x.shape[0]
-    C = fnp.matmul(x.T, x) / float(n)
-    C = (C + C.T) * 0.5                      # explicit symmetry
+    C = _gram(x, n)
     fnp.fill_diagonal(C, fnp.diag(C) + _JITTER)
     try:
         M = _inverse_sqrt(C, width)
@@ -351,7 +411,19 @@ class Estimator(BaseEstimator):
 
 
 def _load_baseline(name: str) -> type[BaseEstimator]:
-    """Load the `Estimator` class from `examples/<name>.py` or `examples/0N_<name>.py`."""
+    """Load the `Estimator` class from `examples/<name>.py` or `examples/0N_<name>.py`.
+
+    `importlib` and `pathlib` are imported here rather than at module scope so
+    that nothing but `math`, `flopscope` and `whestbench` is pulled in when the
+    grader imports this file. Phase 2 restricts a submission to the grader's
+    interpreter, the flopscope client API and the pure-Python stdlib, and every
+    submission is reviewed — dynamic module loading is allowed under that rule,
+    but it has no reason to be on the import path of the graded artifact when
+    it only serves `python estimator.py --baseline ...` locally.
+    """
+    import importlib.util
+    from pathlib import Path
+
     examples_dir = Path(__file__).resolve().parent / "examples"
     candidates = [examples_dir / f"{name}.py", *examples_dir.glob(f"??_{name}.py")]
     for candidate in candidates:
@@ -368,6 +440,8 @@ def _load_baseline(name: str) -> type[BaseEstimator]:
 
 
 if __name__ == "__main__":
+    import argparse
+
     parser = argparse.ArgumentParser(description="Iterate on your estimator locally.")
     parser.add_argument(
         "--baseline",
@@ -375,8 +449,8 @@ if __name__ == "__main__":
         help="Compare your estimator against an example: 'random', 'mean_propagation', "
         "or 'covariance_propagation'.",
     )
-    parser.add_argument("--width", type=int, default=256)
-    parser.add_argument("--depth", type=int, default=32)  # phase-1 competition shape (warmup was 8)
+    parser.add_argument("--width", type=int, default=1024)
+    parser.add_argument("--depth", type=int, default=16)  # phase-2 competition shape (phase 1 was 256x32, warmup 256x8)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
