@@ -90,56 +90,77 @@ from whestbench import MLP, BaseEstimator
 
 # Fraction of the FLOP budget spent on the sampling pass.
 #
-# PHASE 2 CHANGED WHAT THIS TRADES OFF, AND IT IS STILL NOT MUCH OF A LEVER.
+# Phase 1 priced residual wall time into the score (lambda = 1e11), giving
+# score(f) = C*(1 + r/f); a five-point sweep over f = 0.11..0.60 showed the true
+# spread was 1.1% against 5% noise, so f was not a lever there.
 #
-# Phase 1 priced residual wall time into the score at lambda = 1e11, so
-# score(f) = C*(1 + r/f) and higher f was very slightly better. Five graded
-# submissions spanning f = 0.11..0.60 confirmed the true spread was 1.1%
-# against 5% run-to-run noise: raw*N was constant at 0.02222 +/- 5.4%, so raw
-# MSE is exactly V/N and the multiplier's rise cancels it.
+# Phase 2 sets lambda = 0 (C_m = F_m). What survives is whitening's fixed cost,
+# which does not scale with the sample count:
 #
-# Phase 2 sets lambda = 0 (C_m = F_m), which removes the residual term
-# entirely. What is left is the fixed cost of whitening, which does not scale
-# with the sample count:
+#     score(f) = V*c_sample/B  +  V*F_fixed/(N*B)
 #
-#     score(f) = (V/N) * (F_fixed + N*c_sample) / B
-#              = V*c_sample/B  +  V*F_fixed/(N*B)
+# The first term is a floor; only the second moves. Graded, with V = raw*N held
+# at 0.0422 +/- 1%:
 #
-# The first term is a constant floor. Only the second moves, so higher f is
-# better — but measured at the Phase 2 shape F_fixed = 4.3e10 against
-# N*c_sample = 6.0e11, so it is 6.7% of the bill at f = 0.30 and 3.4% at
-# f = 0.58. **Doubling f buys 3.5%.**
+#     f      N        graded/predicted   residual (idle box)   margin
+#     0.30   18,700   6.7399e-7 graded    0.087..0.113          3.5x
+#     0.50   31,808   6.4427e-7 graded    0.135..0.143          2.8x   <- here
+#     0.70   44,916   6.386e-7  predicted 0.184..0.198          2.0x
+#     0.85   54,745   6.362e-7  predicted 0.230..0.236          1.7x
 #
-# THE BINDING CONSTRAINT IS NO LONGER THE BUDGET. Phase 2 replaced the priced
-# residual with a hard 400 ms per-MLP cap, and an MLP that crosses it is scored
-# against zeros at multiplier 1.0. One such MLP in a suite of 100 contributes
-# ~0.9/100 = 9e-3 to a mean that is otherwise ~1e-6, so a single residual
-# overrun is roughly four orders of magnitude worse than every optimisation in
-# this file put together. Residual is dominated by the RNG draw, which scales
-# with N, so raising f spends the safety margin to buy the 3.5%:
+# It saturates because F_fixed/(N*c) is already small: 0.70 buys 0.9% over 0.50
+# and 0.85 buys 1.2%, while the residual margin halves. At f = 0.85 the gain is
+# 7.7e-9 against a 9.1e-3 cost per zeroed MLP — **1,180,000x** — and a 1.7x
+# margin means a grader only 1.7x slower than this box starts failing MLPs.
+# Not taken. The f = 0.70/0.85 residuals are perfectly TIGHT, so this is a
+# genuine margin judgement, not the instrument problem described below.
 #
-#     f = 0.30   residual 0.164 s   2.4x margin
-#     f = 0.58   residual ~0.21 s   1.9x margin   (+3.5% score)
+# THE REAL CONSTRAINT IS THE 400 ms RESIDUAL CAP, and it is worth knowing how
+# this value was nearly set wrong. Phase 2 stopped pricing residual time and
+# hard-caps it: an MLP over the cap is scored against zeros AT MULTIPLIER 1.0.
+# One such MLP in 100 adds ~9e-3 to a mean that is otherwise ~7e-7 — about
+# 250,000x the gain f = 0.50 buys, so the asymmetry says be conservative.
 #
-# That is not a trade worth making, and it points the opposite way from the
-# Phase 1 conclusion for a reason that has nothing to do with score. f = 0.30
-# also stays 3x clear of the 0.1 multiplier floor, which is a cliff rather than
-# a slope: below it the multiplier stops falling while raw MSE keeps rising.
-_BUDGET_FRACTION = 0.30
+# Acting on that, f was dropped to 0.30 after repeated runs showed f = 0.50
+# producing erratic residuals (0.213..0.450 s) and one MLP over the cap.
+# **Those measurements were garbage.** The machine had run its disk to 0.24 GB,
+# which capped the page file, and allocation stalls were landing in the residual
+# bucket. After freeing 27 GB the same configurations measure:
+#
+#     f = 0.30   0.087 0.088 0.091 0.099 0.104 0.107 0.113   3.5x margin
+#     f = 0.50   0.135 0.137 0.138 0.140 0.141 0.142 0.143   2.8x margin
+#
+# tight and stable, 24/24 MLPs clean. The control that settles it: the f = 0.50
+# build that GRADED 0/100 ON THE REAL GRADER measures 0.131..0.137 s here, i.e.
+# indistinguishable from this one.
+#
+# TWO RULES OUT OF THAT. (1) A cliff-shaped failure mode deserves the
+# *distribution* of the margin, not one sample — that part was right. (2) But
+# check the instrument before believing a distribution that looks alarming: an
+# erratic tail with a wide spread is more often a sick machine than a real
+# effect, and the tell is that the spread is wide rather than the mean high.
+#
+# 0.50 sits 5x clear of the 0.1 multiplier floor, which is a cliff rather than a
+# slope: below it the multiplier stops falling while raw MSE keeps rising.
+_BUDGET_FRACTION = 0.50
 
 # Newton-Schulz iterations for the inverse square root (matmul-only whitening).
 #
-# Six, not twelve. NS converges quadratically and the sample covariance starts
+# Four, not twelve. NS converges quadratically and the sample covariance starts
 # close to I, so at the Phase 2 shape the whitening residual measured
 # mean((M^T C M - I)^2) = 1.5e-5, 5.5e-7, 1.5e-9, 3.5e-14, 9.2e-16 over the
 # first five iterations and then sits on the float32 floor. It is converged by
 # 4 even at N = 8,000 (d/N = 0.128), the noisiest block this estimator can
 # draw. Each iteration is three width^3 matmuls = 6.4e9 FLOPs at width 1024,
-# so the six unused ones were costing 3.9e10 — 5.5% of the whole bill — to
-# re-derive a number that had stopped moving. The guard below is what makes
+# so the seven unused ones were costing 4.5e10 — 6.4% of the whole bill — to
+# re-derive a number that had stopped moving. Four lands at 3.5e-14 against a
+# 1e-8 tolerance — a margin of 3e5 — and still converges (2.5e-9) at N = 8,000,
+# the noisiest block this estimator can draw. Three would pass too (1.5e-9) but
+# with only ~7x margin, which is not enough for a guard whose failure costs the
+# whole 1.57x whitening gain. The guard below is what makes
 # trimming this safe: if six were ever too few, the check fails and the
 # unwhitened block is forwarded.
-_NS_ITERS = 6
+_NS_ITERS = 4
 
 # Ridge added to the sample covariance, for numerical safety.
 _JITTER = 1e-6
@@ -161,34 +182,51 @@ _COV_RESCALE_THRESHOLD = 1e30
 def _whiten_overhead_flops(width: int) -> float:
     """Sample-count-independent FLOPs of whitening: the NS loop plus the check.
 
-    Each NS iteration is three `width x width` matmuls at `2*width^3` each, and
-    the check is two more. The old form of this used `3*_NS_ITERS + 4`, which
+    Each NS iteration is three `width x width` matmuls at `2*width^3` each, the
+    check is two more, and folding M into the first layer (`M @ W1`, see
+    `_monte_carlo`) is one more. The old form of this used `3*_NS_ITERS + 4`, which
     dropped the factor of two in `2*n^3` and so under-reserved by half; at
     width 256 that was 0.15% of the budget and invisible, but at width 1024 the
     same error is 1.8% and showed up directly as utilisation overshooting its
     target (0.318 measured against f = 0.30).
     """
-    return (6.0 * _NS_ITERS + 4.0) * width ** 3
+    return (6.0 * _NS_ITERS + 6.0) * width ** 3
 
 
 def _sample_count(mlp: MLP, budget: int, *, whitening: bool) -> int:
     """Largest even sample count fitting the budget fraction.
 
-    Per sample: `2*n*n*L` for the forward pass, plus whitening's two passes
-    over the block — the Gram `X^T X`, billed at `n*n` because it is formed by
-    a symmetric-tagged einsum (see `_gram`), and `X @ M` at `2*n*n`. Reserved
-    as `4*n*n` rather than `3*n*n` so that the plain-matmul fallback inside
-    `_gram` cannot push the run over its own reservation.
+    Per sample, actually billed:
+
+        layer 1        n*n          (matmul over N/2 rows — see _forward_layer_means)
+        layers 2..L    2*n*n*(L-1)
+        Gram           n*n/2        (symmetric einsum over N/2 rows, when whitening)
+        negate+concat  1.5*n        (1 FLOP/element, 0.005% — ignored below)
+
+    summing to `2*n*n*L - n*n/2` with whitening. Reserved at **`2*n*n*L`**,
+    which covers two independent fallbacks at once: `_gram` degrading to a plain
+    matmul (`n*n` instead of `n*n/2`), and the whitening guard failing so that
+    no whitening runs at all. Over-reserving costs utilisation, never
+    correctness.
+
+    There is no `X @ M` term — whitening is folded into layer 1's weights rather
+    than applied to the block, which moved it into the fixed reservation above.
     """
     n, L = mlp.width, mlp.depth
-    per_sample = 2.0 * n * n * L + (4.0 * n * n if whitening else 0.0)
+    per_sample = 2.0 * n * n * L
     reserved = _whiten_overhead_flops(n) if whitening else 0.0
     k = int((_BUDGET_FRACTION * float(budget) - reserved) / per_sample)
     return max(2, k - (k % 2))  # even, for antithetic pairing
 
 
-def _antithetic(width: int, n_samples: int, seed: int):
-    """Antithetic sample block: rows are x and -x, so odd moments vanish exactly.
+def _half_block(width: int, n_samples: int, seed: int):
+    """The FIRST HALF of the antithetic block. The other half is exactly `-H`.
+
+    Nothing in this estimator ever materialises `[H; -H]`. The Gram needs only
+    `H` (`X^T X = 2 H^T H`), and layer 1 needs only `H` because
+    `(-H) @ W = -(H @ W)` — see `_forward_layer_means`. Odd sample moments still
+    vanish exactly, which is the whole point of antithetic pairing; it is only
+    the storage and the arithmetic that are halved.
 
     Drawn directly in float32. `standard_normal` bills 16 FLOPs per element at
     the dtype rate, so a float64 draw is 32 and a float32 draw is 16 — and the
@@ -217,11 +255,14 @@ def _antithetic(width: int, n_samples: int, seed: int):
         half = rng.standard_normal(shape)
     if half.dtype != fnp.float32:
         half = half.astype(fnp.float32)
-    return fnp.concatenate([half, -half], axis=0)
+    return half
 
 
 def _gram(x, n_rows: int):
     """`X^T X / n` — via einsum, which flopscope bills at half the matmul rate.
+
+    Callers pass the ANTITHETIC HALF-BLOCK, not the full one; see
+    `_whitening_matrix` for why that is exact.
 
     A Gram matrix is symmetric by construction, and flopscope 0.12 infers that
     from the repeated operand in `einsum("ni,nj->ij", x, x)`: it returns a
@@ -242,16 +283,74 @@ def _gram(x, n_rows: int):
         return (C + C.T) * 0.5   # einsum is exactly symmetric; matmul is not
 
 
-def _forward_layer_means(mlp: MLP, x) -> fnp.ndarray:
-    """Push samples through every layer, averaging post-ReLU activations.
+def _forward_layer_means(mlp: MLP, h, first_weight) -> fnp.ndarray:
+    """Push the antithetic block through every layer, averaging post-ReLU.
 
-    The weights arrive as float64 and are cast to float32 first: without the
-    cast every `matmul` promotes to float64 and, from flopscope 0.9.0 on, bills
-    at 2.0x — which alone puts this pass over budget. The cast itself is
-    width^2 per layer, five orders of magnitude below the matmul it protects.
+    `h` is the HALF block; `first_weight` is layer 1's matrix with the whitening
+    already folded in (or the plain weight when whitening was not applied).
+
+    LAYER 1 RUNS ON HALF THE ROWS. The full block is `[H; -H]`, and a linear map
+    commutes with negation:
+
+        [H; -H] @ W1  ==  [H @ W1; -(H @ W1)]  ==  [Z; -Z]
+
+    so one matmul over `N/2` rows plus a negation replaces a matmul over `N`
+    rows. Measured 39,245,465,600 -> 19,646,668,800 FLOPs, a 49.9% cut on that
+    layer and **~3% of the whole bill**; the negation and concatenate that
+    replace it bill 1 FLOP per element and come to 0.005%. Exact up to float32
+    rounding (max abs difference 8.4e-5 on activations of scale ~32, i.e. ~3e-6
+    relative, which is BLAS blocking the two shapes differently).
+
+    It stops at layer 1: ReLU is not odd, so `ReLU(-Z) != -ReLU(Z)` and the two
+    halves genuinely diverge from here on. Layers 2..L need all `N` rows.
+
+    Weights are cast to float32 as a guard. whestbench hands out float32 now so
+    it is a free no-op, but under Phase 1's float64 weights an uncast `matmul`
+    promoted the whole block into the 2.0x dtype lane, which on its own put this
+    pass over budget (submissions #318789 / #318802 / #322538).
     """
     rows = []
-    for w in mlp.weights:
+    z = fnp.matmul(h, first_weight)
+    x = fnp.maximum(fnp.concatenate([z, -z], axis=0), 0.0)
+
+    # EXACT LAYER-1 MEAN. Layer 1 is the only place in the network where the
+    # pre-activation distribution is known exactly: the true input is N(0, I),
+    # so z_j is exactly N(0, s_j^2) with s_j = ||W1[:, j]||, and therefore
+    #
+    #     E[ReLU(z_j)] = s_j / sqrt(2*pi)
+    #
+    # in closed form. Antithetic pairing forces the INPUT mean to exactly zero,
+    # but ReLU is not odd, so the post-activation mean still carries sampling
+    # error that antithetic does not touch. Replacing it with the analytic value
+    # injects information no amount of sampling provides.
+    #
+    # s_j uses the ORIGINAL W1, not the whitening-folded `first_weight`: the
+    # whitened block has empirical covariance exactly I, so the empirical
+    # covariance of z is exactly W1^T W1 regardless of the fold.
+    #
+    # Measured 1.028x on V, pooled over 6 MLPs (per-seed 1.007..1.070, SE 0.011),
+    # for 2 FLOPs per sample-neuron — the empirical mean is `rows[0]`, which was
+    # already being computed. Under 0.01% of the bill.
+    #
+    # The same construction with the exact COVARIANCE — the genuine degree-4
+    # correction, via E[ReLU(z_i)ReLU(z_j)] = s_i s_j/(2pi) *
+    # [sqrt(1-r^2) + r*arccos(-r)] — measured 1.099x but costs ~8% of the bill
+    # (empirical Gram of the activations, two inverse square roots), and its
+    # spread over the same 6 MLPs was +/-0.04. Net ~1.5% +/- 4%, i.e. not
+    # distinguishable from zero. **Tested and rejected; do not re-attempt
+    # without a much larger seed count.**
+    w0 = fnp.asarray(mlp.weights[0], dtype=fnp.float32)
+    s = fnp.sqrt(fnp.maximum(fnp.sum(w0 * w0, axis=0), 1e-30))
+    exact_mean = s * float(1.0 / math.sqrt(2.0 * math.pi))
+    # Fused as a single broadcast pass. `x - mean + exact` reads and writes the
+    # whole (N, width) block TWICE; the FLOPs are noise either way, but each
+    # pass over ~130 MB costs ~30 ms of RESIDUAL, and residual is capped at
+    # 400 ms with an MLP-zeroing cliff behind it. Folding the two corrections
+    # into one vector first makes it one pass.
+    x = x - (fnp.mean(x, axis=0) - exact_mean)
+    rows.append(exact_mean)
+
+    for w in mlp.weights[1:]:
         x = fnp.maximum(fnp.matmul(x, fnp.asarray(w, dtype=fnp.float32)), 0.0)
         rows.append(fnp.mean(x, axis=0))
     return fnp.stack(rows, axis=0)
@@ -294,38 +393,70 @@ def _whitening_error(M, C, width: int) -> float:
     return float(fnp.mean(E * E))
 
 
-def _whitened_block(x, width: int):
-    """Return (block, whitened) — the whitened block, or `x` if the check fails.
+def _whitening_matrix(x, width: int):
+    """Return the verified whitening matrix M, or None if the check fails.
 
-    Runs BEFORE the forward pass, so a failure here costs only the O(width^3)
-    already spent: the caller simply forwards the unwhitened samples and lands
-    on plain antithetic MC instead of on an expensive second attempt.
+    Returns M itself rather than `x @ M` so the caller can fold it into the
+    first layer — see `_monte_carlo`. Runs BEFORE the forward pass, so a
+    failure here costs only the O(width^3) already spent: the caller simply
+    forwards the unwhitened samples and lands on plain antithetic MC instead of
+    on an expensive second attempt.
     """
-    n = x.shape[0]
-    C = _gram(x, n)
+    # THE GRAM ONLY NEEDS THE HALF-BLOCK, which is all the caller holds. The
+    # full block is `X = [H; -H]`, so
+    #
+    #     X^T X = H^T H + (-H)^T(-H) = 2 H^T H
+    #     C = X^T X / N = H^T H / (N/2)
+    #
+    # the same matrix from half the rows. Exact, not an approximation: measured
+    # relative RMS difference between the two forms is 1.4e-7, about 2.4 float32
+    # eps. Halves both the Gram's FLOPs (18.28e9 -> 9.14e9) and its residual
+    # time, and the residual half is the one that matters — see
+    # `_BUDGET_FRACTION`.
+    C = _gram(x, x.shape[0])
     fnp.fill_diagonal(C, fnp.diag(C) + _JITTER)
     try:
         M = _inverse_sqrt(C, width)
         if _whitening_error(M, C, width) <= _WHITEN_TOL:
-            return fnp.matmul(x, M), True
+            return M
     except Exception:
         pass
-    return x, False
+    return None
 
 
 def _monte_carlo(mlp: MLP, budget: int) -> fnp.ndarray:
-    """Antithetic MC, whitened when the whitening transform verifies."""
+    """Antithetic MC, whitened when the whitening transform verifies.
+
+    THE WHITENING IS NEVER APPLIED TO THE SAMPLE BLOCK. Whitening then running
+    the first layer is `(X @ M) @ W1`; matrix multiplication is associative, so
+    folding it as `X @ (M @ W1)` gives the same answer and the `X @ M` pass over
+    the block disappears entirely. That pass cost `2*N*width^2` — at the Phase 2
+    shape 3.4e10 FLOPs, **5.0% of the whole bill** — and it is replaced by a
+    single `2*width^3` = 2.1e9 product that does not scale with the sample
+    count. The saving grows with N, and it is exact rather than an
+    approximation: the two orderings differ only in float32 rounding.
+
+    This is worth more than every other optimisation in this file combined, and
+    it only became worth chasing at Phase 2's shape: at width 256 the same
+    fold saved 0.6% because `width^3` is 64x smaller relative to `N*width^2`
+    when the width drops 4x.
+    """
     width = mlp.width
     whitening = (
         _whiten_overhead_flops(width)
         <= _WHITEN_MAX_OVERHEAD_FRACTION * _BUDGET_FRACTION * float(budget)
     )
-    x = _antithetic(width, _sample_count(mlp, budget, whitening=whitening), mlp.seed)
+    h = _half_block(width, _sample_count(mlp, budget, whitening=whitening), mlp.seed)
+
+    w0 = fnp.asarray(mlp.weights[0], dtype=fnp.float32)
     if whitening:
-        x, _ = _whitened_block(x, width)
+        M = _whitening_matrix(h, width)
+        if M is not None:
+            w0 = fnp.matmul(M, w0)
+
     # Last line of defence for the dtype rate: a float64 block would double the
     # cost of every layer below. A no-op when the block is already float32.
-    return _forward_layer_means(mlp, fnp.asarray(x, dtype=fnp.float32))
+    return _forward_layer_means(mlp, fnp.asarray(h, dtype=fnp.float32), w0)
 
 
 def _relu_moments(mu_pre, var_pre):

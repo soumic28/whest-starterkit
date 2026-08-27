@@ -1,313 +1,213 @@
 # WhestBench 2026 — Status Report
 
 **Project:** ARC White-Box Estimation Challenge 2026 (`whest-starterkit`)
-**Last updated:** 2026-08-08
-**Designated submission:** `#325983` — whitened antithetic Monte Carlo, strict float32, f = 0.30
+**Last updated:** 2026-08-26
+**Live round:** **Phase 2** (round 1429), 22 Aug → **17 Oct 2026**
+**Best submission:** **`#328499`** — 6.4427 × 10⁻⁷ (14.5% better than the port)
 
-> **Phase 1 was extended to 10 August 2026, 23:59 UTC.** The write-up is due
-> 17 August. See §0 for the rule changes that came with the extension — one of
-> them can silently cost us the prize ranking.
-
----
-
-## 0. What changed on 3 August (forum topic 18125)
-
-**Each team nominates up to 2 submissions** for the Phase 1 private
-re-evaluation, which is what decides prize rankings — the public board does not.
-**If you nominate nothing, AIcrowd takes your top 2 public submissions**, which
-for us would have included **#318705**, broken under the current cost model
-(~1.1 × 10⁻⁴). This must be overridden explicitly; the organizers said they
-will email nominating instructions.
-
-**Participant code now runs on one physical core** (2 vCPUs, down from 16); the
-flopscope backend keeps seven. Residual wall time is still charged at
-λ = 1e11 FLOP/s, so 0.1 s costs 3.7% of budget. Verified below.
-
-**The cost model was repriced** (flopscope 0.10.0 / whestbench 0.14.0): dtype
-rates as in §1a, and data movement is no longer free — copy / fill /
-`concatenate` / `astype` / `reshape` / `stack` / `eye` / `ones` bill 1 per
-element written, gather / sort bill 4. Still free: `zeros`, `empty`, views,
-`diag`, non-copying `asarray`. **float16 gets no discount** (rate 1.0, same as
-float32), so there is no dtype lever below float32.
-
-Two exploits were closed deliberately (float64 "packing", residual wall-time
-arbitrage). Compliance validation is **manual**, and submissions found to have
-circumvented FLOP accounting are disqualified before prize rollover.
+> Phase 1 and Phase 2 scores are **not comparable** — different shape, budget and
+> suite. 7.07 × 10⁻⁷ here is not a regression from Phase 1's 3.46 × 10⁻⁷.
 
 ---
 
-## 1. Where we stand
+## 0. What Phase 2 changed
 
-| Metric | Value |
-|---|--:|
-| **Graded score (#325983)** | **3.46 × 10⁻⁷** |
-| Graded raw final-layer MSE | 1.14 × 10⁻⁶ |
-| Graded compute multiplier | 0.304 |
-| vs Monte-Carlo reference (7.0 × 10⁻⁷) | **~2.0×** |
-| Failed MLPs | **0** |
-| Wall-clock per MLP, one core | 2.4 s (limit 60 s) |
-| Residual wall time, grader | 0.0045 of budget |
+| | Phase 1 | **Phase 2** |
+|---|---|---|
+| shape | 256 × 32 | **1024 × 16** → `predict()` returns (16, 1024) |
+| budget `B_m` | 2.72e11 | **2⁴¹ = 2,199,023,255,552** |
+| effective compute | `C = F + λR` | **`C = F`** (λ = 0) |
+| residual wall time | priced at 1e11 | **hard cap 0.4 s — over it, the MLP is ZEROED** |
+| wall per `predict()` | 60 s | 120 s |
+| `setup()` | — | 5 s, overrun fails the whole submission |
+| memory | 64 GB | **8 GB** |
+| submissions/day | 48 | **10** |
+| unmetered compute | priced | **prohibited, disqualifiable** |
 
-Public rank before this session was **#169 of 200+** at 3.895 × 10⁻⁷; 3.46 × 10⁻⁷
-lands around **#140**.
+AIcrowd required **re-accepting the challenge rules** before it would take a
+Phase 2 submission — `whest submit` failed until that was done in the browser.
 
-### Progression
+**The grader lags the kit**: it runs `flopscope 0.11.0` / `whestbench 0.15.0`
+while the kit pins 0.12.0 / 0.16.0. Verified in a throwaway 0.11.0 venv that both
+billing optimisations below hold under it.
 
-| Submission | Method | Graded | vs sampling |
-|---|---|--:|--:|
-| #318691 | covariance propagation | 6.62 × 10⁻⁶ | 0.098× |
-| #318705 | antithetic Monte Carlo | 6.25 × 10⁻⁷ | 1.12× |
-| #318789 / #318802 / #322538 | + whitening, float64 hot path | 0.70 / 6.6e-5 / 6.6e-5 | **failed** |
-| #322542 | + whitening, strict float32 | 3.89 × 10⁻⁷ | ~1.8× |
-| #325981 | + copy/stats billing fixes, f = 0.60 | 3.88 × 10⁻⁷ | ~1.8× |
-| #325982 / #325986 / #325987 | budget-fraction sweep (see §1b) | 3.65 / 4.00 / 3.76 × 10⁻⁷ | — |
-| **#325983** | **f = 0.30** | **3.46 × 10⁻⁷** | **~2.0×** |
+---
 
-Roughly a **19× improvement** over the first submission — though the honest
-accounting is that everything after #322542 is worth ~0.3% (two billing fixes);
-the rest of the spread in that table is measurement noise, per §1b. All five
-2026-08-08 submissions are statistically equivalent in expectation.
+## 1. Results
 
-#325981's raw MSE is **bit-identical** to #322542's (6.419045888605978 × 10⁻⁷),
-which confirms both that the estimator's numerics are unchanged and that neither
-the 0.10.0 repricing nor the single-core container materially raised our
-residual.
+| id | change | N | raw MSE | mult | score |
+|---|---|--:|--:|--:|--:|
+| #328224 | Phase 2 port of the Phase 1 method | 16,338 | 2.5770e-6 | 0.2924 | 7.5354e-7 |
+| #328226 | + whitening folded into W₁ | 17,238 | 2.4496e-6 | 0.2920 | 7.1525e-7 |
+| #328227 | ablation: whitening **off** | 19,660 | 3.3764e-6 | 0.3002 | 1.0137e-6 |
+| #328228 | + f = 0.50 on the old structure | 29,756 | 1.4000e-6 | 0.4862 | 6.8067e-7 |
+| #328352 | + NS = 5, f = 0.30 | 17,420 | 2.4216e-6 | 0.2919 | 7.0692e-7 |
+| #328489 | + half-block Gram, NS = 4 | 18,134 | 2.3540e-6 | 0.2959 | 6.9656e-7 |
+| #328497 | + layer 1 on the half block | 18,700 | 2.2787e-6 | 0.2958 | 6.7399e-7 |
+| **#328499** | **+ f = 0.50 — BEST** | 31,808 | 1.3073e-6 | 0.4928 | **6.4427e-7** |
 
-### 1b. The budget fraction — measured properly, and it is *not* a lever
+**14.5% better than the port.** `estimator.py` on branch `phase2` is #328499.
 
-A five-point sweep on the real grader settles a question this report has flipped
-on twice. The original reasoning was right: raw MSE falls as 1/N while the
-multiplier rises as N, and the two cancel.
+### The cost model is exactly predictive
 
-| id | f | N | raw | mult | resid | score | **V = raw·N** |
-|---|--:|--:|--:|--:|--:|--:|--:|
-| #325981 | 0.60 | 36,470 | 6.4190e-7 | 0.6052 | 0.0052 | 3.8846e-7 | 0.02341 |
-| #325982 | 0.45 | 27,314 | 8.0295e-7 | 0.4547 | 0.0047 | 3.6512e-7 | 0.02193 |
-| **#325983** | **0.30** | 18,158 | 1.1380e-6 | 0.3043 | 0.0043 | **3.4624e-7** | 0.02066 |
-| #325986 | 0.15 | 9,004 | 2.6024e-6 | 0.1539 | 0.0039 | 4.0049e-7 | 0.02343 |
-| #325987 | 0.11 | 6,562 | 3.3023e-6 | 0.1138 | 0.0038 | 3.7564e-7 | 0.02167 |
-
-**`V = raw·N` is constant at 0.02222 ± 5.4%.** Raw MSE is exactly `V/N` with no
-floor, so
+The grader's multiplier matched locally-computed `flops_used / 2⁴¹` to **five
+significant figures on every single submission**. With `V = raw × N` stable at
+0.0416–0.0427 (±1%),
 
 ```
-score(f) = C · (1 + r/f)     C = V·per_sample/B = 3.64e-7,  r ≈ 0.0015
+score(f) = V·c_sample/B  +  V·F_fixed/(N·B)
 ```
 
-and the **true spread across f = 0.11…0.60 is 1.1%**, against 5% run-to-run
-noise on V. Every apparent ordering in the score column above is noise —
-#325983's 3.46e-7 is a lucky draw, not an improvement.
+predicts a change before it is submitted — the fold was predicted at 5.3% and
+graded 5.1%. The multiplier match also **proves 0/100 failures**, since any
+failed MLP forces the multiplier to 1.0.
 
-**How this was briefly got wrong, because the failure mode is instructive.** The
-first three points (0.60 / 0.45 / 0.30) fit `raw = A + K/f` with A = 1.45e-7
-beautifully, predicted f = 0.30 at 3.431e-7 against 3.462e-7 measured — 1% error
-— and implied a 12% gain already banked plus more at f ≈ 0.12. Three monotone
-noise draws are indistinguishable from a bias floor. Extending to f = 0.15 and
-0.11 returned 4.00e-7 and 3.76e-7 — *worse*, and non-monotone, which is what
-exposed it.
+## 2. What actually helped
 
-> **Rule:** do not fit a score model on fewer than ~5 points over a narrow
-> range. Check the physical invariant (`raw·N`) rather than the fitted curve.
+**a. Fold the whitening into the first layer — 5.1%, the biggest win.**
+Whitening then running layer 1 is `(X @ M) @ W₁`; by associativity that equals
+`X @ (M @ W₁)`, so the `X @ M` pass over the whole sample block **disappears**.
+It cost `2·N·width²` = 3.4e10 FLOPs and is replaced by a single `2·width³` =
+2.1e9 product. Verified exact before submitting: relative RMS difference between
+the two orderings was 2.3e-7, about 4 float32 eps. It also cut residual from
+0.164 s to 0.097 s, which is what made everything after it possible.
 
-**f = 0.30 is therefore chosen on robustness, not score.** Higher f is better by
-~0.25%, which is not worth having. What 0.30 buys is distance from two cliffs:
+**This was worth only 0.6% at Phase 1's width 256** — `width³` is 64× smaller
+relative to `N·width²` when the width drops 4×. It went unnoticed for all of
+Phase 1 because at that shape it genuinely did not matter. *Re-check every cost
+tradeoff when the shape changes; the negligible ones can become the largest.*
 
-- **Budget exhaustion** zeroes the whole MLP. At f = 0.30 residual would have to
-  reach 1.9 s to trigger it, against 0.014 s measured — a 136× margin (78× at
-  f = 0.60).
-- **The 0.1 multiplier floor** is a cliff, not a slope: below `f + r = 0.1` the
-  multiplier stops falling while raw MSE keeps rising, so f = 0.08 is strictly
-  worse than anything above it. 0.30 sits 3× clear.
+**b. `einsum("ni,nj->ij", x, x)` bills exactly half of `matmul(x.T, x)`** —
+17,149,939,200 against 34,266,415,104. flopscope infers symmetry from the
+repeated operand and bills only the upper triangle. The discount is priced into
+**einsum only**: `as_symmetric` tags on the Newton–Schulz matmuls measured
+*more* expensive (51,711,580,136 vs 51,535,419,392), even though every NS
+iterate is symmetric.
 
-> **#318705 must not be designated for Phase 2.** Measured under `flopscope==0.10.0`
-> — what the grader runs today — it exhausts the budget on 3/3 real MLPs and scores
-> ~1.1 × 10⁻⁴. It worked in July only because the grader was on the older flopscope.
-> See §1a.
+**c. `standard_normal(dtype=float32)`** — bills 16/element instead of float64's
+32 and removes the `.astype` copy. The FLOPs are noise; the **78 ms off the
+residual** is the point.
 
-### 1a. The dtype-billing trap (cause of three failed submissions)
-
-From **flopscope 0.9.0** onward, FLOPs are billed at a per-dtype **rate**:
-float16/float32 = 1.0, **float64 = 2.0** (`flopscope/_weights.py`,
-`_ACTIVE_DTYPE_RATES`). The starter kit pins `flopscope>=0.8.0rc5,<0.9.0`, which
-has no such rate — its docs still say *"dtype matters for precision, not FLOPs."*
-The grader is on the newer one (whestbench 0.14.0 requires flopscope ≥ 0.10.0).
-
-Two sources of float64 each double the entire forward pass on their own:
-
-- **`mlp.weights` are float64**, so `matmul(x_f32, w_f64)` promotes.
-- **`fnp.eye` / `fnp.zeros` default to float64**, so a whitening matrix built
-  from them promotes the sample block at `x @ M`.
-
-Submission #322538 validated at 0.68 utilization locally and hit **1.08 on the
-grader**, exhausting the budget partway through the forward pass and scoring the
-covariance-propagation fallback. The fix is to cast weights with
-`fnp.asarray(w, dtype=fnp.float32)` and to pass `dtype=fnp.float32` to every
-`eye`/`zeros`. That alone took the score from 6.58 × 10⁻⁵ to 3.89 × 10⁻⁷.
-
-This also **retracts** the earlier conclusion that `fnp.linalg` is not
-grader-safe. Running the grader's real `flopscope-client`/`flopscope-server`
-stack locally gives bit-identical values to in-process flopscope — including
-`cholesky`, `inv`, `.T` and `float(...)` — on both synthetic and real dataset
-MLPs. Whitening was never the problem.
-
-**Reproduce the grader before every submission:** install `flopscope==0.10.0`
-in a scratch venv, run the estimator on real dataset MLPs whose weights were
-saved *without* casting, and check `ctx.flops_used` against the budget. Read
-graded diagnostics from `GET https://www.aicrowd.com/api/v1/submissions/{id}`
-with `Authorization: Token <key>` — `score_secondary` is the raw MSE, so
-`score / score_secondary` is the compute multiplier and immediately reveals a
-blown budget.
-
----
-
-## 2. The method
+**d. Layer 1 only needs the half block — ~3%, and it lowers the floor.**
+A linear map commutes with negation, so for `X = [H; −H]`
 
 ```
-1. Draw N/2 Gaussian samples; append their negatives  (antithetic)
-      -> every ODD sample moment is exactly zero
-2. Whiten: C = XᵀX/N ;  M = C^(-1/2) by Newton-Schulz (matmul only)
-      -> sample covariance is exactly I  (kills the degree-2 error)
-3. VERIFY MᵀCM == I. If it fails, forward the unwhitened block instead.
-4. Forward all samples in float32; average post-ReLU activations per layer
-5. Fallback: covariance propagation (~0.6% of budget) -> zeros
-6. Sanitize: finite, shape (depth, width), float32
+[H; −H] @ W₁  ==  [H@W₁ ; −(H@W₁)]  ==  [Z; −Z]
 ```
 
-N is sized to 60% of the FLOP budget including whitening's `4·N·n²` overhead.
-**Every array on the hot path stays float32** — see §1a.
+One matmul over `N/2` rows plus a negation replaces a matmul over `N` rows:
+39,245,465,600 → 19,646,668,800, a 49.9% cut on that layer. It stops at layer 1
+because ReLU is not odd, so the halves genuinely diverge afterwards. Unlike the
+other items this **lowers `c`** (32.5n² → 31.5n²) and so lowers the floor itself
+rather than merely approaching it.
 
-Two design rules, each bought with a failed submission:
+Checked and rejected as an extension: at layer 2, `ReLU(−Z) = ReLU(Z) − Z` needs
+two `N/2`-row matmuls — exactly the cost of one `N`-row matmul. No saving past
+layer 1.
 
-- **The guard checks the property, not a proxy.** `MᵀCM == I` is exactly what
-  whitening claims, and costs `2·width³` (~0.01% of budget) because it works on
-  the 256×256 covariance rather than the sample block. #318802's
-  `mean(x²) ≈ 1` check only caught scale errors.
-- **Never chain two expensive methods.** FLOPs spent by a failed attempt are
-  never refunded, so "whitening at 60% → plain MC at 60%" needs 120% of budget
-  and is guaranteed to exhaust it — that is what #318802 did. Here the guard
-  fires *before* the forward pass, so its failure path is free: the same
-  forward pass on the same samples, minus the whitening.
+**e. The same identity gives the Gram for free.** `XᵀX = 2·HᵀH`, so the
+covariance comes from half the rows (18.28e9 → 9.14e9). Between this and (d) the
+full block is never materialised at all. Both exact to float32 rounding.
 
----
+**f. Newton–Schulz needs 4 iterations, not 12** — measured whitening residual
+`mean((MᵀCM − I)²)` = 1.5e-5, 5.5e-7, 1.5e-9, 3.5e-14, then flat on the float32
+floor. The guard reports 5.5e-15 against a 1e-8 tolerance. Stopped at 4 rather
+than 3: 3 passes (1.5e-9) but with only ~7× margin, and a guard failure costs
+the entire 1.57× whitening gain.
 
-## 3. Why this is (near) the ceiling for sampling
-
-The error decomposes by Hermite degree. Measured via Mehler's formula
-(`Cov(g(x),g(y)) = Σ_d ρ^d Var(g_d)`), at n=256, L=32:
-
-| Degree | Share | Status |
-|---|--:|---|
-| odd (1,3,5…) | 54% of Var(g) | ✅ killed by antithetic |
-| 2 | ~49% of the even part | ✅ killed by whitening |
-| **4** | **60–93% of the remainder** | ❌ **out of reach — see below** |
-| 6, 8… | remainder | ❌ |
-
-**Degree-4 cannot be matched within budget.** Two independent arguments:
-
-- **Degrees of freedom:** 183,181,376 independent degree-4 constraints vs
-  9,086,464 DOF from 35k samples — underdetermined by 20×. No transformation
-  of the sample set can fix it.
-- **Cubature:** only structured rules can (symmetry satisfies most constraints).
-  Budget allows 64,850 samples. The cheapest constructible degree-5 rule
-  (Stroud `E_n^{r²}` 5-1, `n²+n+2`) needs **65,794 points = 101.5% of budget** —
-  short by 944 points. Stroud 5-2 (`2n²+1`) is 202%. The Möller-type bound
-  (33,153 points, 51%) has no known construction in 256 dimensions.
-
-Also ruled out: reducing FLOPs/sample. `2n²L` is irreducible — flopscope charges
-by shape (no dtype discount), ReLU sparsity is per-sample so batched gathers
-don't help, and low-rank weight approximation destroys correlation.
+**g. Fixed a real bug:** `_whiten_overhead_flops` dropped the factor of 2 in
+`2·n³`, under-reserving by half. Invisible at width 256 (0.15% of budget), 1.8%
+at width 1024 — it showed as utilisation overshooting 0.30 to 0.318.
 
 ---
 
-## 4. Experiment ledger — 14 tested, 2 shipped
+## 3. *** THE RESIDUAL CAP, AND A MEASUREMENT MISTAKE WORTH KEEPING ***
 
-**Shipped**
-- Antithetic sampling — kills all odd-degree error
-- Input whitening — **1.76×** on the mini split
+Phase 2 hard-caps residual wall time at 400 ms; an MLP over it is scored against
+zeros **at multiplier 1.0**. One such MLP in 100 adds ~9e-3 to a mean that is
+otherwise ~6.5e-7, so a single overrun is ~5 orders of magnitude worse than every
+optimisation here combined. That asymmetry governs `_BUDGET_FRACTION`.
 
-**Rejected, with the reason**
+**The mistake.** f was dropped from 0.50 to 0.30 after repeated runs showed
+f = 0.50 producing erratic residuals (0.213…0.450 s) and one MLP over the cap.
+Those measurements were **garbage**. The machine had run its disk down to
+0.24 GB, which caps the Windows page file; allocation stalls were landing in the
+residual bucket, and runs eventually died on 3.91 MiB allocations. After freeing
+27 GB, the same builds measure:
 
-| Idea | Result | Why it failed |
-|---|--:|---|
-| Diagonal Edgeworth correction | ~1.0× | Linear step crushes marginal skew ~100×/layer (CLT) |
-| Linear control variate | 1.10× ceiling | ρ_max = 0.30; only 9% of variance is linear in x |
-| Truncated-network CV | circular | High ρ (0.93) only at k=31, where E[·] is the original problem |
-| Edgeworth on sampled cumulants | 0.98× | Variance-limited: variance 1.2e-6 ≫ bias 4e-8 |
-| Rao–Blackwell (Gaussian) | 0.46× | Final pre-activations are far from Gaussian at depth 32 |
-| Exact bivariate ReLU covariance | 1.3× | Gain trick was never the bottleneck — the Gaussian *premise* is |
-| Hand-derived Hermite κ₃ | corr 0.12–0.51 | Inherited κ₃ from deep layers dominates fresh generation |
-| Truncated-depth κ₃ tensor | corr ~0.20 | Built on inaccurate covariance — chicken-and-egg |
-| **ARC's own kprop (K=2, K=3)** | **~100× worse than MC** | Verified against their reference code; breaks down at L/n = 1/8 |
-| Latin hypercube | 1.01× | The local "2.24×" was seed noise |
-| Radial normalization (homogeneity) | 1.03× | Radial part is only ~0.4% of variance |
-| Diagonal rescaling | 1.01× | Fixes variances, not cross-correlations |
-| Budget fraction tuning | 1.03× max | `adjusted = C(1 + r/f)`; floor is C = 3.72e-7 |
-| Degree-5 cubature | infeasible | 101.5% of budget |
+```
+f = 0.30   0.087 0.088 0.091 0.099 0.104 0.107 0.113    3.5× margin
+f = 0.50   0.135 0.137 0.138 0.140 0.141 0.142 0.143    2.8× margin   <- chosen
+f = 0.70   0.184 0.189 0.190 0.191 0.193 0.194 0.198    2.0× margin
+f = 0.85   0.230 0.231 0.232 0.234 0.235 0.235 0.236    1.7× margin
+```
 
----
+tight and stable, 0 failures throughout. The control that settles it: the
+f = 0.50 build that had **already graded 0/100 on the real grader** measures
+0.131…0.137 s on the healthy box — indistinguishable.
 
-## 5. Two findings worth keeping
+**Two rules.** (1) When one failure costs ~5 orders of magnitude more than the
+prize, judge on the *distribution* of the margin, not one sample — that part was
+right, and it is why f stops at 0.50 rather than 0.85. (2) **Check the measuring
+instrument before believing an alarming distribution.** The tell was that the
+*spread* was wide, not that the mean was high; a sick machine looks exactly like
+that, a real margin problem does not.
 
-**1. ARC's published method fails at this depth.** Running their *unmodified*
-reference implementation at n=256, L=32: K=2 gives 1.38e-4, K=3 factorized gives
-1.32e-4 — about **100× worse than plain Monte Carlo**. Our K=2 matches theirs
-bit-for-bit, confirming our implementation was always correct. Their results stop
-at 12 hidden layers; they name depth scaling as their open problem, and it is
-fully realized here.
-
-**2. The target is quantified.** Edgeworth using the *true* κ₃/κ₄ of the final
-pre-activations scores **4.16 × 10⁻⁸** — better than rank 1. So a winning method
-must compute those cumulants without sampling noise. That is the whole problem,
-stated precisely.
+**Where f stops:** 0.70 buys 0.9% over 0.50 and 0.85 buys 1.2%, while the margin
+halves. At 0.85 the gain is 7.7e-9 against 9.1e-3 per zeroed MLP — **1,180,000×**
+— and 1.7× margin means a grader only 1.7× slower than this box starts failing.
+The f = 0.70/0.85 residuals are perfectly tight, so that is a margin judgement,
+not an instrument problem.
 
 ---
 
-## 6. Methodology notes (hard-won)
+## 4. Where the headroom is
 
-- **Local 4-seed screening is unreliable.** It produced a phantom 2.24× (LHS)
-  and understated a real 1.76× (whitening). **Only the 100-MLP mini split decides.**
-- **Diagnose before building.** Every build-first attempt was wasted; the two
-  diagnostics (shape-vs-moment, Hermite spectrum) each redirected the whole effort.
-- Fitting a raw Vandermonde in ρ is ill-conditioned and returns negative
-  variances — divide by ρ² first and fit in s = ρ².
-- Windows: every `whest` command needs `PYTHONUTF8=1 PYTHONIOENCODING=utf-8`.
+Whitening is worth keeping: ablation #328227 measured **V 0.06638 → 0.04223, a
+1.572× cut**, against a 1.141× break-even (without it you get 14.1% more
+samples). Dropping it costs 42% of score. Notably that is *weaker* than Phase 1's
+1.76× at width 256 despite `d/N` being 9× larger — the opposite of the prediction.
+
+**The method is now at 1.032× its own floor.** With `c = 2n²L − n²/2 =
+33,030,144` billed FLOPs per sample and `V = 0.0416`, the asymptote as f → 1 with
+zero fixed cost is `V·c/B` = **6.25 × 10⁻⁷**.
+
+> **The cost side is finished.** What remains is ~3%, all of it in `f`, and it is
+> not worth the residual margin. Going materially lower requires reducing **V**,
+> the per-sample variance.
+
+Antithetic pairing forces every odd moment to exactly zero; whitening forces the
+sample covariance to exactly I. **Degrees 1–3 are exactly handled, and degree 4
+is the first untried term** — that is the open direction, and it is the contest's
+own research problem. The control-variate family stays closed for a
+shape-independent reason: antithetic already makes `mean(xᵢ) = 0` exactly, so any
+linear control variate's correction term is identically zero.
+
+Also checked and found negligible: the network is **positively homogeneous**
+(ReLU, no biases), so `f(x) = ‖x‖·g(x/‖x‖)` with `‖x‖ ⊥ u`, suggesting
+`E[f] = E[R]·E[g(u)]` with `E[R]` known in closed form. The variance ratio is
+`(κ − r)/(1 − r)` with `κ = E[R²]/E[R]² = 1 + 1/(2d)`; at d = 1024 that is
+**~1.0007**. Radial concentration in high dimension kills it.
 
 ---
 
-## 7. Open items
+## 5. Environment health
 
-- [ ] **NOMINATE 2 SUBMISSIONS before 10 Aug 23:59 UTC.** Recommended:
-      **#325983** (f = 0.30) and **#325981** (f = 0.60). Per §1b these are
-      statistically equivalent in expectation, so the choice is about validity,
-      not score: both are verified under flopscope 0.10.0, both ran 0 failures,
-      and they bracket the budget-fraction range. Watch for the organizers'
-      email. **Do not let the default stand**: it would pick #318705, which is
-      broken under the current cost model.
-- [ ] **Algorithmic Contribution write-up due 17 Aug 2026** — §1b and §3 are the
-      substance; a $500–5,000 community-contribution prize also exists for
-      cost-model feedback.
-- [ ] **Regenerate the AIcrowd API key** — it was pasted in chat and shell history.
-- [x] Dev-only deps removed — `uv sync` against the new pins dropped torch,
-      einops, jaxtyping, sympy, networkx and mpmath.
-- [x] Probe low f — done (#325986 at 0.15, #325987 at 0.11). Both came back
-      *worse*, which is what disproved the bias-floor model. See §1b. **No
-      further budget-fraction work is worthwhile**; the whole range is 1.1%.
+- **Disk was the hidden failure.** It reached 0.24 GB free, which capped the page
+  file and corrupted every residual measurement (§3) before killing runs outright.
+  Fixed by deleting the uv cache (regenerable) — now **27 GB free**. Watch this.
+- **The dataset's non-streaming path needs ~13 GB** to materialise an arrow cache
+  and fails with a misleading `DatasetGenerationError` wrapping
+  `OSError: [Errno 28]`. **Use `--streaming`**, which writes nothing.
+- **Take residual readings on an idle machine, repeatedly, and read the spread.**
 
-## 8. If work resumes
+---
 
-Our *estimator* is exhausted as a sampler. The remaining route to the leaders is
-a **method that survives depth 32** — precisely the contest's open problem. The
-Hermite spectrum and the 4.16 × 10⁻⁸ target in §5 define exactly what it must do.
+## 6. Open items
 
-Ranks 5–20 currently show raw MSE ~2 × 10⁻⁷ against our 1.14 × 10⁻⁶ at f = 0.30
-(6.4 × 10⁻⁷ at f = 0.60), so their variance-per-FLOP is genuinely ~4× better.
-Ranks 1–4 sit at 4 × 10⁻¹⁰, far below the 4.16 × 10⁻⁸ oracle bound this project
-measured — which is itself evidence they are not doing honest estimation, and
-they are now under manual compliance review.
-
-**The methodological lesson from §1b generalises**, and it is the opposite of
-what a three-point fit suggested: run-to-run noise on the 100-MLP suite is ~5%,
-so *any* effect smaller than about 10% needs either many submissions or a
-physical invariant to check against. `raw·N` was that invariant here, and it
-answered in one line what five submissions answered expensively. Ask what
-quantity should be conserved before fitting a curve to a score column.
+- [ ] **Nominate `#328499`** (6.4427e-7) if Phase 2 uses Phase 1's nomination
+      mechanism. Watch for an organizer email — Phase 1's default was a trap.
+- [ ] Degree-4 moment matching — the only identified route to a lower `V`.
+- [ ] Regenerate the AIcrowd API key (pasted in chat/shell history during Phase 1).
+- [ ] `estimator.py` / `STATUS_REPORT.md` are modified but **uncommitted** on
+      branch `phase2`.
