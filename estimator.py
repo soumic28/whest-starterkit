@@ -142,7 +142,49 @@ from whestbench import MLP, BaseEstimator
 #
 # 0.50 sits 5x clear of the 0.1 multiplier floor, which is a cliff rather than a
 # slope: below it the multiplier stops falling while raw MSE keeps rising.
-_BUDGET_FRACTION = 0.50
+_BUDGET_FRACTION = 0.1016
+
+# Weight on the covariance-propagation estimate in the final blend.
+#
+# Covariance propagation is DETERMINISTIC — its error is pure bias, no variance.
+# Monte Carlo is UNBIASED — pure variance, no bias. Their errors are therefore
+# independent, and for `mu = w*CP + (1-w)*MC`
+#
+#     MSE(w) = w^2 * bias^2 + (1-w)^2 * V/N        (the cross term vanishes)
+#
+# minimised at `w = (V/N) / (bias^2 + V/N)`. Measured at this shape:
+# bias^2 = 4.43e-6 and V/N = 1.03e-5 at N = 3,875, giving w = 0.700 — which is
+# also where a direct sweep over 6 MLPs against a 400k-sample reference bottoms
+# out. The optimum is FLAT: w = 0.65..0.80 all land within 2% of each other, so
+# this does not need per-MLP tuning and does not need to be exact.
+#
+#     w      0.00    0.50    0.65   0.70   0.80    1.00
+#     score  1.05e-6 3.63e-7 3.01e-7 2.95e-7 3.07e-7 4.18e-7
+_BLEND_CP = 0.874
+
+# Covariance propagation carries a SYSTEMATIC multiplicative bias: it
+# over-estimates the final-layer means by a remarkably constant ~0.17%.
+# Correcting it with a single constant is the largest single win available
+# after the blend itself.
+#
+# Fitted as the least-squares scale c = <CP, truth>/<CP, CP> on **eight real
+# contest MLPs** (mini split, v2-phase2) against their baked 1e9-sample ground
+# truth:
+#
+#     c per MLP  0.998069 0.998096 0.998124 0.998231 0.998263 0.998282
+#                0.998437 0.998560
+#     mean 0.998258   std 0.000160
+#
+# and independently on 8 self-generated He-init MLPs: mean 0.998281, std
+# 0.000328 — agreeing to 2.3e-5. **That agreement is the evidence this is a
+# property of the ALGORITHM at this shape, not of the public MLPs**, which is
+# what makes it safe for the private re-evaluation. Shipping calibration
+# constants is explicitly permitted (docs/concepts/allowed-code.md).
+#
+# Measured on the real MLPs: CP's MSE falls 4.394e-6 -> 1.425e-6, a **3.08x**
+# cut. Because CP was ~72% of the blend's error budget, that moves the optimal
+# blend weight from 0.70 up to 0.874.
+_CP_SCALE = 0.998258
 
 # Newton-Schulz iterations for the inverse square root (matmul-only whitening).
 #
@@ -177,6 +219,17 @@ _WHITEN_MAX_OVERHEAD_FRACTION = 0.25
 
 # Covariance-propagation fallback: rescale if a diagonal entry blows up.
 _COV_RESCALE_THRESHOLD = 1e30
+
+
+def _covprop_flops(width: int, depth: int) -> float:
+    """FLOPs of the covariance-propagation pass, for budget reservation.
+
+    Dominated by one symmetric-rate `einsum("ij,ia,jb->ab", cov, w, w)` per
+    layer at `3*width^3`; measured 51,701,818,336 at 1024x16 against `3*n^3*L`
+    = 51,539,607,552, so 3.1 carries the remainder plus the per-layer
+    `as_symmetric` re-tags and the stats calls.
+    """
+    return 3.1 * width ** 3 * depth
 
 
 def _whiten_overhead_flops(width: int) -> float:
@@ -214,7 +267,9 @@ def _sample_count(mlp: MLP, budget: int, *, whitening: bool) -> int:
     """
     n, L = mlp.width, mlp.depth
     per_sample = 2.0 * n * n * L
-    reserved = _whiten_overhead_flops(n) if whitening else 0.0
+    reserved = _covprop_flops(n, L)
+    if whitening:
+        reserved += _whiten_overhead_flops(n)
     k = int((_BUDGET_FRACTION * float(budget) - reserved) / per_sample)
     return max(2, k - (k % 2))  # even, for antithetic pairing
 
@@ -505,13 +560,38 @@ def _covariance_propagation(mlp: MLP) -> fnp.ndarray:
         mean, var_post, gain = _relu_moments(mu_pre, var_pre)
         cov = fnp.multiply(fnp.outer(gain, gain), cov_pre)
         fnp.fill_diagonal(cov, var_post)
+        # RE-TAG. `fill_diagonal` writes into cov and silently voids its
+        # symmetry tag (the `multiply` above keeps it, because outer(gain,gain)
+        # is itself symmetry-inferred), so without this the einsum above bills
+        # the FULL rate on every subsequent layer — measured 67,674,776,560
+        # against 51,709,240,799, i.e. 0.73% of the whole budget thrown away
+        # with no warning emitted. as_symmetric costs 7*width^2 a call.
+        cov = flops.as_symmetric(cov, symmetry=(0, 1))
         mu = mean
         rows.append(mean * math.exp(log_scale) if log_scale != 0.0 else mean)
     return fnp.stack(rows, axis=0)
 
 
 class Estimator(BaseEstimator):
-    """Verified-whitened antithetic Monte Carlo.
+    """Covariance propagation blended with whitened antithetic Monte Carlo.
+
+    THE BLEND IS THE POINT, AND IT ONLY WORKS AT THIS ROUND'S SHAPE. Covariance
+    propagation is width-asymptotic: at Phase 1's 256x32 (L/n = 0.125) it was
+    ~125x worse than sampling and this file carried it purely as a last-resort
+    fallback. At Phase 2's 1024x16 (L/n = 0.0156, EIGHT TIMES smaller) it lands
+    within **3.5x** of sampling — measured 4.43e-6 raw MSE against MC's 1.26e-6.
+
+    That changes what it is for. It costs 2.35% of the budget, so the whole
+    estimator fits under the **0.1 multiplier floor**, where `max(0.1, C/B)`
+    stops rewarding thrift and compute below 10% of budget is effectively FREE.
+    Its error is pure bias where MC's is pure variance, so the two combine as
+    independent estimators. Measured over 6 MLPs against a 400k-sample
+    reference: 1.05e-6 for MC alone, 4.18e-7 for covariance propagation alone,
+    **2.95e-7 blended** — a 52% improvement over the best pure-MC submission.
+
+    Read the shape dependence as the general lesson: a method rejected by
+    measurement at one shape has been rejected at THAT shape. This one was
+    re-tested only because Phase 2 moved L/n by 8x.
 
     DO NOT add an expensive fallback behind another expensive method. FLOPs
     spent by a failed attempt are NOT refunded, so "try expensive A, then
@@ -526,13 +606,44 @@ class Estimator(BaseEstimator):
     def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
         expected_shape = (mlp.depth, mlp.width)
 
+        # Covariance propagation FIRST: its cost is deterministic given the
+        # shape and is reserved inside `_sample_count`, so running it can never
+        # squeeze the sampling pass. If it raises, its FLOPs are still spent —
+        # which is why the reservation is unconditional.
         try:
-            pred = _monte_carlo(mlp, budget)
+            cp = _covariance_propagation(mlp)
+            if cp.shape != expected_shape or not bool(fnp.all(fnp.isfinite(cp))):
+                cp = None
         except Exception:
-            try:
-                pred = _covariance_propagation(mlp)
-            except Exception:
-                pred = fnp.zeros(expected_shape)
+            cp = None
+
+        try:
+            mc = _monte_carlo(mlp, budget)
+            if mc.shape != expected_shape or not bool(fnp.all(fnp.isfinite(mc))):
+                mc = None
+        except Exception:
+            mc = None
+
+        if cp is not None and mc is not None:
+            # SCALE GUARD. A finite-but-wrong covariance propagation would
+            # poison the blend far worse than dropping it. The two methods
+            # estimate the same quantity, so their overall scales must agree to
+            # within a small factor; anything outside that is a failure of the
+            # recursion (variance blow-up or collapse), not a difference of
+            # opinion. Costs 2*width per layer.
+            s_cp = float(fnp.sum(cp * cp))
+            s_mc = float(fnp.sum(mc * mc))
+            if not (s_mc > 0.0 and 0.04 < s_cp / s_mc < 25.0):
+                cp = None
+
+        if cp is not None and mc is not None:
+            pred = cp * (_BLEND_CP * _CP_SCALE) + mc * (1.0 - _BLEND_CP)
+        elif mc is not None:
+            pred = mc
+        elif cp is not None:
+            pred = cp * _CP_SCALE
+        else:
+            pred = fnp.zeros(expected_shape)
 
         # Guarantee finite values, correct shape, and float32 output.
         pred = fnp.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)

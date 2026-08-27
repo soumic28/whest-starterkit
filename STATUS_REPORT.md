@@ -1,9 +1,9 @@
 # WhestBench 2026 — Status Report
 
 **Project:** ARC White-Box Estimation Challenge 2026 (`whest-starterkit`)
-**Last updated:** 2026-08-26
+**Last updated:** 2026-08-27
 **Live round:** **Phase 2** (round 1429), 22 Aug → **17 Oct 2026**
-**Best submission:** **`#328499`** — 6.4427 × 10⁻⁷ (14.5% better than the port)
+**Best submission:** **`#328617`** — 1.2799 × 10⁻⁷ (**5.89× better than the port**)
 
 > Phase 1 and Phase 2 scores are **not comparable** — different shape, budget and
 > suite. 7.07 × 10⁻⁷ here is not a regression from Phase 1's 3.46 × 10⁻⁷.
@@ -35,32 +35,26 @@ billing optimisations below hold under it.
 
 ## 1. Results
 
-| id | change | N | raw MSE | mult | score |
-|---|---|--:|--:|--:|--:|
-| #328224 | Phase 2 port of the Phase 1 method | 16,338 | 2.5770e-6 | 0.2924 | 7.5354e-7 |
-| #328226 | + whitening folded into W₁ | 17,238 | 2.4496e-6 | 0.2920 | 7.1525e-7 |
-| #328227 | ablation: whitening **off** | 19,660 | 3.3764e-6 | 0.3002 | 1.0137e-6 |
-| #328228 | + f = 0.50 on the old structure | 29,756 | 1.4000e-6 | 0.4862 | 6.8067e-7 |
-| #328352 | + NS = 5, f = 0.30 | 17,420 | 2.4216e-6 | 0.2919 | 7.0692e-7 |
-| #328489 | + half-block Gram, NS = 4 | 18,134 | 2.3540e-6 | 0.2959 | 6.9656e-7 |
-| #328497 | + layer 1 on the half block | 18,700 | 2.2787e-6 | 0.2958 | 6.7399e-7 |
-| **#328499** | **+ f = 0.50 — BEST** | 31,808 | 1.3073e-6 | 0.4928 | **6.4427e-7** |
+| id | change | score | vs port |
+|---|---|--:|--:|
+| #328224 | Phase 2 port of the Phase 1 method | 7.5354e-7 | — |
+| #328499 | cost work: W₁ fold, half-block, NS=4, f=0.50 | 6.4427e-7 | 14.5% |
+| #328609 | + exact analytic layer-1 ReLU mean | 6.2025e-7 | 17.7% |
+| #328611 | **+ covprop BLENDED with MC at the 0.1 floor** | 3.2767e-7 | 56.5% |
+| #328613 | + budget tuned to sit just under the floor | 3.1762e-7 | 57.8% |
+| **#328617** | **+ covprop scale calibration (c = 0.998258)** | **1.2799e-7** | **83.0%** |
 
-**14.5% better than the port.** `estimator.py` on branch `phase2` is #328499.
+All graded, all 0/100 failures. `estimator.py` on branch `phase2` is #328617.
+
+**The two structural wins came from re-testing things the record called closed.**
+Cost work bought 17.7%; the blend and its calibration bought the other 65%.
 
 ### The cost model is exactly predictive
 
 The grader's multiplier matched locally-computed `flops_used / 2⁴¹` to **five
-significant figures on every single submission**. With `V = raw × N` stable at
-0.0416–0.0427 (±1%),
-
-```
-score(f) = V·c_sample/B  +  V·F_fixed/(N·B)
-```
-
-predicts a change before it is submitted — the fold was predicted at 5.3% and
-graded 5.1%. The multiplier match also **proves 0/100 failures**, since any
-failed MLP forces the multiplier to 1.0.
+significant figures on every submission**, and the final six sit at exactly
+0.10000 — the multiplier floor. The match also **proves 0/100 failures**, since
+any failed MLP forces the multiplier to 1.0.
 
 ## 2. What actually helped
 
@@ -161,35 +155,68 @@ not an instrument problem.
 
 ---
 
-## 4. Where the headroom is
+## 4. The blend — where the 65% came from
 
-Whitening is worth keeping: ablation #328227 measured **V 0.06638 → 0.04223, a
-1.572× cut**, against a 1.141× break-even (without it you get 14.1% more
-samples). Dropping it costs 42% of score. Notably that is *weaker* than Phase 1's
-1.76× at width 256 despite `d/N` being 9× larger — the opposite of the prediction.
+**Covariance propagation reopened at this shape.** The record said it was closed:
+~125× worse than Monte Carlo. That was measured at **256×32**. These methods are
+width-asymptotic and Phase 2 moved the controlling ratio 8×:
 
-**The method is now at 1.032× its own floor.** With `c = 2n²L − n²/2 =
-33,030,144` billed FLOPs per sample and `V = 0.0416`, the asymptote as f → 1 with
-zero fixed cost is `V·c/B` = **6.25 × 10⁻⁷**.
+| round | shape | `L/n` | covprop vs MC |
+|---|---|--:|--:|
+| Phase 1 | 256 × 32 | 0.125 | ~125× worse |
+| **Phase 2** | **1024 × 16** | **0.0156** | **3.5× worse** |
 
-> **The cost side is finished.** What remains is ~3%, all of it in `f`, and it is
-> not worth the residual margin. Going materially lower requires reducing **V**,
-> the per-sample variance.
+3.5×-worse wins because covprop costs only **2.35% of budget**, putting the whole
+estimator under the **0.1 multiplier floor** where `max(0.1, C/B)` stops
+rewarding thrift and compute below 10% is free. Staying at the floor is optimal:
+pushing utilisation to 0.15 or 0.20 makes the score *worse* (3.79e-7, 4.17e-7).
 
-Antithetic pairing forces every odd moment to exactly zero; whitening forces the
-sample covariance to exactly I. **Degrees 1–3 are exactly handled, and degree 4
-is the first untried term** — that is the open direction, and it is the contest's
-own research problem. The control-variate family stays closed for a
-shape-independent reason: antithetic already makes `mean(xᵢ) = 0` exactly, so any
-linear control variate's correction term is identically zero.
+**And the two methods combine.** Covprop is deterministic (pure bias, zero
+variance); MC is unbiased (pure variance, zero bias). Errors are independent, so
 
-Also checked and found negligible: the network is **positively homogeneous**
-(ReLU, no biases), so `f(x) = ‖x‖·g(x/‖x‖)` with `‖x‖ ⊥ u`, suggesting
-`E[f] = E[R]·E[g(u)]` with `E[R]` known in closed form. The variance ratio is
-`(κ − r)/(1 − r)` with `κ = E[R²]/E[R]² = 1 + 1/(2d)`; at d = 1024 that is
-**~1.0007**. Radial concentration in high dimension kills it.
+```
+MSE(w) = w²·bias² + (1−w)²·V/N        optimal w = (V/N)/(bias² + V/N)
+```
 
----
+**Covprop's bias is mostly a systematic 0.17% scale error.** One shipped constant
+cuts its MSE **3.08×**. Fitted two independent ways:
+
+| source | c | std |
+|---|--:|--:|
+| 8 **real** contest MLPs vs baked 1e9-sample truth | **0.998258** | 0.000160 |
+| 8 self-generated He-init MLPs | 0.998281 | 0.000328 |
+
+**They agree to 2.3e-5** — evidence this is a property of the *algorithm at this
+shape*, not something memorised from the public split, which is what makes it
+safe for the private re-evaluation. Shipping calibration constants is explicitly
+permitted (`docs/concepts/allowed-code.md`). Correcting covprop moved the optimal
+weight 0.70 → **0.874**.
+
+**Rejected — self-calibration.** MC is unbiased, so `c` can be estimated per-MLP
+as `⟨CP,MC⟩/⟨CP,CP⟩` with no constant and no transfer risk. Measured **worse**
+(2.03e-6 vs 1.45e-6): MC noise gives ĉ a std of 0.000627, larger than the true
+across-MLP spread of 0.000160.
+
+**Rejected — exact bivariate ReLU covariance** inside covprop (replacing the gain
+trick with `E[ReLU(zᵢ)ReLU(zⱼ)]` by 12-node Gauss–Hermite): **0.26×, 3.8× worse**.
+ReLU's kink at zero breaks Gauss–Hermite's smoothness assumption.
+
+**Rejected — exact layer-1 covariance / positive homogeneity** (see git history):
+1.099× ± 0.04 against an 8% cost, and 1.0007× respectively.
+
+### Where the remaining error is
+
+Error budget is now **87% covprop bias, 13% MC variance**. After calibration
+`b² = 1.425e-6`, and the across-MLP spread in `c` explains only ~1.6% of it — the
+rest is **shape** error in covprop's per-neuron pattern, not magnitude. So
+refining `c`, or predicting it per-MLP from a cheap observable, is capped at
+~1.6%. Any further gain has to correct the shape.
+
+A billing trap found here: **`fill_diagonal` silently voids a symmetry tag with
+no warning**, so the per-layer `einsum("ij,ia,jb->ab", cov, w, w)` was billing the
+full rate — 67,674,776,560 instead of 51,701,818,336, **0.73% of the whole
+budget**. Re-tag with `flops.as_symmetric(cov, symmetry=(0, 1))` after any write
+into `cov`.
 
 ## 5. Environment health
 
@@ -205,9 +232,10 @@ Also checked and found negligible: the network is **positively homogeneous**
 
 ## 6. Open items
 
-- [ ] **Nominate `#328499`** (6.4427e-7) if Phase 2 uses Phase 1's nomination
+- [ ] **Nominate `#328617`** (1.2799e-7) if Phase 2 uses Phase 1's nomination
       mechanism. Watch for an organizer email — Phase 1's default was a trap.
-- [ ] Degree-4 moment matching — the only identified route to a lower `V`.
+- [x] Degree-4 moment matching — tested at layer 1 (§4). Mean correction banked;
+      covariance correction rejected as not distinguishable from zero.
 - [ ] Regenerate the AIcrowd API key (pasted in chat/shell history during Phase 1).
 - [ ] `estimator.py` / `STATUS_REPORT.md` are modified but **uncommitted** on
       branch `phase2`.
