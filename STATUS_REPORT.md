@@ -218,7 +218,84 @@ full rate — 67,674,776,560 instead of 51,701,818,336, **0.73% of the whole
 budget**. Re-tag with `flops.as_symmetric(cov, symmetry=(0, 1))` after any write
 into `cov`.
 
-## 5. Environment health
+## 5. Pre-submission verification (run 2026-08-27 against `#328617`)
+
+Every item on `docs/how-to/pre-submission-checklist.md`, plus the
+`docs/concepts/allowed-code.md` rules.
+
+### Correctness
+
+| check | result |
+|---|---|
+| `whest validate` — **every row** OK, not just the panel header | 4/4 OK |
+| `setup(context)` within the graded cap | 0.00 s (cap **5 s**) |
+| `predict()` returned shape | correct, finite |
+| local runner, seed 42, 3 MLPs | 1.614103e-7 |
+| subprocess runner, seed 42, 3 MLPs (must match within ~1%) | 1.614103e-7 — **bit-identical** |
+
+### Budget hygiene
+
+| check | result | cap |
+|---|--:|--:|
+| `budget_exhausted` on every MLP | **false** | — |
+| `flops_used` | 217,639,587,803 (**0.09897**) | 2,199,023,255,552 |
+| multiplier | **0.10000** (the floor) | — |
+| `residual_wall_time_s`, multi-thread | 0.057–0.094 s | **0.4 s** |
+| `residual_wall_time_s`, **`--max-threads 1`** | 0.078–0.144 s (**2.8×** margin) | 0.4 s |
+| `residual_wall_time_exhausted` | **false** | — |
+| `time_exhausted` / wall per predict | 5.7 s single-core (**21×**) | 120 s |
+| peak process memory | **0.261 GB** (31× margin) | **8 GB** |
+| no clock-calibrated internal deadline | none — `grep` for `time.*` is empty | — |
+
+`--max-threads 1` is the meaningful stress test: the grader pins **2 vCPUs** to
+the solution. Residual stays at 2.8× margin there.
+
+### Allowed code (`docs/concepts/allowed-code.md`)
+
+| rule | result |
+|---|---|
+| module-level imports | `math`, `flopscope`, `flopscope.numpy`, `whestbench` — nothing else |
+| vendored numpy/scipy/BLAS | none |
+| compiled kernels, ctypes/cffi/FFI | none |
+| asyncio / threads / subprocess / multiprocessing | none |
+| compute while a flopscope op is in flight | none — no callbacks, no lazy objects |
+| touching the flopscope client / transport / accounting | none (`flops_used` appears only in comments) |
+| meaningful computation in residual time | none — residual is layer loops and control flow |
+
+`argparse`, `importlib.util` and `pathlib` are imported **lazily inside the
+`__main__` block only**, so the graded import path pulls in nothing but the four
+modules above. All are pure-Python stdlib and none is on the prohibition list.
+
+### Package
+
+`whest validate-package` passes; the shipped `estimator.py` is **sha256-identical**
+to the working tree; manifest declares whestbench 0.16.0 / flopscope 0.12.0.
+
+### Shape-agnosticism
+
+Nothing is pinned to 1024×16 — the estimator reads `mlp.width` / `mlp.depth`:
+
+| shape | output | utilisation | |
+|---|---|--:|---|
+| 1024×16 (graded) | (16, 1024) | 0.0991 | OK |
+| 1024×12 | (12, 1024) | 0.0988 | OK |
+| 768×16 | (16, 768) | 0.1001 | OK |
+| 1024×20 | (20, 1024) | 0.0992 | OK |
+| 256×32 (Phase 1) | (32, 256) | 0.1011 | OK |
+
+### One judgement call, stated plainly
+
+`_CP_SCALE = 0.998258` is fitted partly on **public** MLPs. The rules permit
+shipping calibration constants, and tuning *to the public split* is pointless
+by design because the private re-evaluation uses fresh seeds — so the question
+is whether this constant is a property of the MLPs or of the algorithm. Evidence
+that it is the algorithm: an independent fit on **self-generated** He-init MLPs
+gives 0.998281 against the real MLPs' 0.998258, agreeing to **2.3e-5**, and the
+across-MLP standard deviation is only 0.000160. It should therefore transfer to
+unseen seeds at the same shape. It is *not* validated for a different shape —
+if the round's shape ever moves, refit it.
+
+## 6. Environment health
 
 - **Disk was the hidden failure.** It reached 0.24 GB free, which capped the page
   file and corrupted every residual measurement (§3) before killing runs outright.
@@ -230,7 +307,7 @@ into `cov`.
 
 ---
 
-## 6. Open items
+## 7. Open items
 
 - [ ] **Nominate `#328617`** (1.2799e-7) if Phase 2 uses Phase 1's nomination
       mechanism. Watch for an organizer email — Phase 1's default was a trap.

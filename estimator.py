@@ -142,7 +142,7 @@ from whestbench import MLP, BaseEstimator
 #
 # 0.50 sits 5x clear of the 0.1 multiplier floor, which is a cliff rather than a
 # slope: below it the multiplier stops falling while raw MSE keeps rising.
-_BUDGET_FRACTION = 0.1016
+_BUDGET_FRACTION = 0.1025
 
 # Weight on the covariance-propagation estimate in the final blend.
 #
