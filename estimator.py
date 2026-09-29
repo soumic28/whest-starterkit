@@ -2,7 +2,9 @@
 
 Strategy — verified-whitened antithetic Monte Carlo, billed in float32:
 
-    Primary  : antithetic MC with the sample block whitened so its covariance
+    Primary  : antithetic MC, with optional whitening when enough independent
+               samples fit the budget. The current 1024x16 plan skips whitening.
+               When enabled, the sample block is whitened so its covariance
                is exactly I (measured 1.76x better raw MSE than plain
                antithetic MC on the 100-MLP mini split).
 
@@ -88,7 +90,9 @@ import flopscope as flops
 import flopscope.numpy as fnp
 from whestbench import MLP, BaseEstimator
 
-# Fraction of the FLOP budget spent on the sampling pass.
+# Target fraction for covariance propagation plus sampling (and whitening,
+# when eligible). Current blend targets the 10% scoring floor; the larger
+# fractions discussed below document historical pure-MC experiments.
 #
 # Phase 1 priced residual wall time into the score (lambda = 1e11), giving
 # score(f) = C*(1 + r/f); a five-point sweep over f = 0.11..0.60 showed the true
@@ -104,7 +108,7 @@ from whestbench import MLP, BaseEstimator
 #
 #     f      N        graded/predicted   residual (idle box)   margin
 #     0.30   18,700   6.7399e-7 graded    0.087..0.113          3.5x
-#     0.50   31,808   6.4427e-7 graded    0.135..0.143          2.8x   <- here
+#     0.50   31,808   6.4427e-7 graded    0.135..0.143          2.8x   (historical pure-MC choice)
 #     0.70   44,916   6.386e-7  predicted 0.184..0.198          2.0x
 #     0.85   54,745   6.362e-7  predicted 0.230..0.236          1.7x
 #
@@ -187,21 +191,13 @@ _BLEND_CP = 0.874
 _CP_SCALE = 0.998258
 
 # Newton-Schulz iterations for the inverse square root (matmul-only whitening).
-#
-# Four, not twelve. NS converges quadratically and the sample covariance starts
-# close to I, so at the Phase 2 shape the whitening residual measured
-# mean((M^T C M - I)^2) = 1.5e-5, 5.5e-7, 1.5e-9, 3.5e-14, 9.2e-16 over the
-# first five iterations and then sits on the float32 floor. It is converged by
-# 4 even at N = 8,000 (d/N = 0.128), the noisiest block this estimator can
-# draw. Each iteration is three width^3 matmuls = 6.4e9 FLOPs at width 1024,
-# so the seven unused ones were costing 4.5e10 — 6.4% of the whole bill — to
-# re-derive a number that had stopped moving. Four lands at 3.5e-14 against a
-# 1e-8 tolerance — a margin of 3e5 — and still converges (2.5e-9) at N = 8,000,
-# the noisiest block this estimator can draw. Three would pass too (1.5e-9) but
-# with only ~7x margin, which is not enough for a guard whose failure costs the
-# whole 1.57x whitening gain. The guard below is what makes
-# trimming this safe: if six were ever too few, the check fails and the
-# unwhitened block is forwarded.
+# Four steps are retained for well-sampled covariance matrices. Whitening is
+# attempted only with at least four INDEPENDENT rows per dimension; antithetic
+# partners do not improve covariance conditioning. At width 1024, the current
+# 4170-sample whitening plan has only 2085 independent rows, and four steps
+# produced errors 7.15e-6..7.33e-6 on seeds 0, 1, 42 (tolerance 1e-8).
+# Skipping that rejected attempt frees the reservation for 5130 plain samples.
+# Larger budgets retain whitening and its explicit numerical acceptance check.
 _NS_ITERS = 4
 
 # Ridge added to the sample covariance, for numerical safety.
@@ -213,9 +209,16 @@ _JITTER = 1e-6
 _WHITEN_TOL = 1e-8
 
 # Whitening's fixed cost is ~50*width^3, independent of sample count, so it is
-# negligible at the contest budget (0.3% of 2.72e11) but not at a tiny one.
+# potentially significant at width 1024, especially near the 10% scoring floor.
 # Attempt it only when it is genuinely cheap relative to the sampling pass.
 _WHITEN_MAX_OVERHEAD_FRACTION = 0.25
+
+# Four Newton-Schulz steps need a well-conditioned sample covariance. Count
+# independent rows, not both members of each antithetic pair. At the current
+# budget N=4170 gives only 2085 independent rows for width 1024: the guard
+# rejects the transform, wasting its Gram and iteration costs. Require at
+# least four rows per dimension, then retain the numerical guard below.
+_WHITEN_MIN_ROWS_PER_DIM = 4
 
 # Covariance-propagation fallback: rescale if a diagonal entry blows up.
 _COV_RESCALE_THRESHOLD = 1e30
@@ -500,6 +503,8 @@ def _monte_carlo(mlp: MLP, budget: int) -> fnp.ndarray:
     whitening = (
         _whiten_overhead_flops(width)
         <= _WHITEN_MAX_OVERHEAD_FRACTION * _BUDGET_FRACTION * float(budget)
+        and _sample_count(mlp, budget, whitening=True) // 2
+        >= _WHITEN_MIN_ROWS_PER_DIM * width
     )
     h = _half_block(width, _sample_count(mlp, budget, whitening=whitening), mlp.seed)
 

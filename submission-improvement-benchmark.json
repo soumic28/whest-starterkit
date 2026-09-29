@@ -1,0 +1,316 @@
+{
+  "dataset": "https://huggingface.co/datasets/aicrowd/arc-whestbench-public-2026/resolve/v2-phase2/",
+  "ground_truth_samples": 1000000000,
+  "weight_source": "Reconstructed from published protocol-3.0 input seeds",
+  "threads": 1,
+  "sha256": {
+    "baseline": "215f6fafc8f82782260277ff80e3258fb04417732718211aad87bca8da154d28",
+    "candidate": "eab2f3d7257118ccbd69413b0607b8608d9825234397649e9670e445892fdd41"
+  },
+  "per_mlp": [
+    {
+      "name": "logan-fitzgerald",
+      "first_layer_sanity_mse": 6.979550618013697e-10,
+      "baseline": {
+        "final_layer_mse": 1.480952943462291e-06,
+        "adjusted_final_layer_score": 1.4809529434622912e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.08277810027357191,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.4193238400606622e-06,
+        "adjusted_final_layer_score": 1.4193238400606623e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.06046100001549348,
+        "failed": false
+      }
+    },
+    {
+      "name": "william-graves",
+      "first_layer_sanity_mse": 6.407885957959714e-10,
+      "candidate": {
+        "final_layer_mse": 1.3285687509848408e-06,
+        "adjusted_final_layer_score": 1.3285687509848408e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.06283589950180613,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.3639162179403815e-06,
+        "adjusted_final_layer_score": 1.3639162179403817e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.0625105001963675,
+        "failed": false
+      }
+    },
+    {
+      "name": "raymond-barnes",
+      "first_layer_sanity_mse": 7.067950981431981e-10,
+      "baseline": {
+        "final_layer_mse": 1.2449992024158142e-06,
+        "adjusted_final_layer_score": 1.2449992024158143e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.061053800163790584,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.242031813808506e-06,
+        "adjusted_final_layer_score": 1.2420318138085062e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.05958070026827045,
+        "failed": false
+      }
+    },
+    {
+      "name": "steven-rice",
+      "first_layer_sanity_mse": 6.378402910012237e-10,
+      "candidate": {
+        "final_layer_mse": 1.4548337205148478e-06,
+        "adjusted_final_layer_score": 1.4548337205148479e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.05848460042034276,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.53966859198492e-06,
+        "adjusted_final_layer_score": 1.53966859198492e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.06325310046668164,
+        "failed": false
+      }
+    },
+    {
+      "name": "sarah-kelley",
+      "first_layer_sanity_mse": 6.561435110519209e-10,
+      "baseline": {
+        "final_layer_mse": 1.3725061719555339e-06,
+        "adjusted_final_layer_score": 1.372506171955534e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.07237950019771233,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.3446509318802307e-06,
+        "adjusted_final_layer_score": 1.3446509318802308e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.06005330025800504,
+        "failed": false
+      }
+    },
+    {
+      "name": "christopher-morales",
+      "first_layer_sanity_mse": 7.575269196646861e-10,
+      "candidate": {
+        "final_layer_mse": 1.3392910967403326e-06,
+        "adjusted_final_layer_score": 1.3392910967403325e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.0641775002295617,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.354821453652433e-06,
+        "adjusted_final_layer_score": 1.354821453652433e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.07208519999403507,
+        "failed": false
+      }
+    },
+    {
+      "name": "cheryl-graham",
+      "first_layer_sanity_mse": 6.703912355798813e-10,
+      "baseline": {
+        "final_layer_mse": 8.895872412450561e-07,
+        "adjusted_final_layer_score": 8.895872412450561e-08,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.09717249980894849,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 8.642970341160937e-07,
+        "adjusted_final_layer_score": 8.642970341160937e-08,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.06081020046258345,
+        "failed": false
+      }
+    },
+    {
+      "name": "renee-park",
+      "first_layer_sanity_mse": 6.601872451494906e-10,
+      "candidate": {
+        "final_layer_mse": 1.095936025442533e-06,
+        "adjusted_final_layer_score": 1.0959360254425331e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.061514600209193304,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.1337338199141686e-06,
+        "adjusted_final_layer_score": 1.1337338199141686e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.06679659947985783,
+        "failed": false
+      }
+    },
+    {
+      "name": "justin-johnson",
+      "first_layer_sanity_mse": 6.520793974229555e-10,
+      "baseline": {
+        "final_layer_mse": 1.1509352039483349e-06,
+        "adjusted_final_layer_score": 1.150935203948335e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.06739199967705645,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.1467318163987365e-06,
+        "adjusted_final_layer_score": 1.1467318163987365e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.09039319984731264,
+        "failed": false
+      }
+    },
+    {
+      "name": "christina-lopez",
+      "first_layer_sanity_mse": 6.957684740849235e-10,
+      "candidate": {
+        "final_layer_mse": 1.6401948868132237e-06,
+        "adjusted_final_layer_score": 1.640194886813224e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.08092969976132736,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.6290649230065172e-06,
+        "adjusted_final_layer_score": 1.6290649230065173e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.08506610008771531,
+        "failed": false
+      }
+    },
+    {
+      "name": "randy-murray",
+      "first_layer_sanity_mse": 7.124415640769044e-10,
+      "baseline": {
+        "final_layer_mse": 1.241804797512197e-06,
+        "adjusted_final_layer_score": 1.241804797512197e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.06724090012721717,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.2187509742040982e-06,
+        "adjusted_final_layer_score": 1.2187509742040983e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.07155609983601607,
+        "failed": false
+      }
+    },
+    {
+      "name": "john-koch",
+      "first_layer_sanity_mse": 6.708621887174804e-10,
+      "candidate": {
+        "final_layer_mse": 1.2936196390387386e-06,
+        "adjusted_final_layer_score": 1.2936196390387388e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.06499570060987025,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.331194734430591e-06,
+        "adjusted_final_layer_score": 1.331194734430591e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.06298150008660741,
+        "failed": false
+      }
+    },
+    {
+      "name": "susan-butler",
+      "first_layer_sanity_mse": 6.616274403348221e-10,
+      "baseline": {
+        "final_layer_mse": 1.2113413235288042e-06,
+        "adjusted_final_layer_score": 1.2113413235288042e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.06856559927109629,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.2311965556140126e-06,
+        "adjusted_final_layer_score": 1.2311965556140126e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.07251850003376603,
+        "failed": false
+      }
+    },
+    {
+      "name": "crystal-gonzales",
+      "first_layer_sanity_mse": 6.78892660838093e-10,
+      "candidate": {
+        "final_layer_mse": 1.4389406058292293e-06,
+        "adjusted_final_layer_score": 1.4389406058292295e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.0673503999132663,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.526254487944075e-06,
+        "adjusted_final_layer_score": 1.5262544879440752e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.10005199996521696,
+        "failed": false
+      }
+    },
+    {
+      "name": "troy-richardson",
+      "first_layer_sanity_mse": 6.892655439461048e-10,
+      "baseline": {
+        "final_layer_mse": 1.0777287692802224e-06,
+        "adjusted_final_layer_score": 1.0777287692802224e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.09301660041091964,
+        "failed": false
+      },
+      "candidate": {
+        "final_layer_mse": 1.0609842845563844e-06,
+        "adjusted_final_layer_score": 1.0609842845563844e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.08523909977520816,
+        "failed": false
+      }
+    },
+    {
+      "name": "sharon-whitehead",
+      "first_layer_sanity_mse": 7.707597407535793e-10,
+      "candidate": {
+        "final_layer_mse": 1.2642014345647954e-06,
+        "adjusted_final_layer_score": 1.2642014345647956e-07,
+        "flops_used": 218601007068,
+        "residual_wall_time_s": 0.10452330028056167,
+        "failed": false
+      },
+      "baseline": {
+        "final_layer_mse": 1.2529298666464882e-06,
+        "adjusted_final_layer_score": 1.2529298666464882e-07,
+        "flops_used": 219623086043,
+        "residual_wall_time_s": 0.10339679991011508,
+        "failed": false
+      }
+    }
+  ],
+  "summary": {
+    "baseline": {
+      "mean_score": 1.3000899843042392e-07,
+      "failures": 0,
+      "max_residual_s": 0.10339679991011508
+    },
+    "candidate": {
+      "mean_score": 1.273972088160454e-07,
+      "failures": 0,
+      "max_residual_s": 0.10452330028056167
+    },
+    "relative_improvement_percent": 2.00892987863163,
+    "candidate_wins": 13
+  },
+  "final_source_sha256": "f48c67cf7e4535410941a22671cb11e94a45e211a294c8a7afa023793a96fecb",
+  "source_note": "Candidate comments and module docstring were clarified during the run; executable AST was verified unchanged."
+}
