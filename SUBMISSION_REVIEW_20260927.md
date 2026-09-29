@@ -73,4 +73,12 @@ https://github.com/AIcrowd/whest-starterkit/blob/main/docs/how-to/pre-submission
   `d72a63f33225739ad17d650bf4e7eceda5c59d0813a02cbd2df3c814304f5d4e`.
 
 Windows checks do not establish Linux sandbox memory enforcement or performance
-on grader hardware. No upload or leaderboard submission was made in this review.
+on grader hardware.
+
+## AIcrowd result — 29 September 2026
+
+The validated archive was uploaded as submission **332976** and graded
+successfully. Its leaderboard score is **1.231529138294718e-7**, with raw
+final-layer MSE **1.231529138294718e-6**.
+
+Tracking: https://www.aicrowd.com/challenges/arc-white-box-estimation-challenge-2026/submissions/332976
